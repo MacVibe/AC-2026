@@ -33,6 +33,7 @@ function spawnBot() {
 
     ws.on("open", () => {
         sendIntro(ws);
+
         let hbIdx = 0;
         ws._hb = setInterval(() => {
             if (ws.readyState === WebSocket.OPEN) {
