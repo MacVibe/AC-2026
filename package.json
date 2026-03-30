@@ -1,11 +1,11 @@
 {
-  "name": "script",
+  "name": "ws-bot",
   "version": "1.0.0",
-  "description": "Simple script",
   "main": "script.js",
   "scripts": {
     "start": "node script.js"
   },
-  "author": "",
-  "license": "MIT"
+  "dependencies": {
+    "ws": "^8.0.0"
+  }
 }
