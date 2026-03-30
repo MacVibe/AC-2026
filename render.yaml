@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: ws-bot
+    runtime: node
+    buildCommand: npm install
+    startCommand: node script.js
