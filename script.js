@@ -51,6 +51,7 @@ function spawnBot() {
 
     ws.on("open", () => {
         sendIntro(ws);
+
         teamInterval = setInterval(() => {
             if (ws.readyState === WebSocket.OPEN && !joined) ws.send(TEAM_JOIN_PACKET);
         }, 1000);
@@ -66,6 +67,7 @@ function spawnBot() {
             joined = true;
             clearInterval(teamInterval);
             ws.send(CHAT_JOIN_PACKET);
+
             infiniteInterval = setInterval(() => {
                 if (ws.readyState === WebSocket.OPEN) ws.send(INFINITE_PACKET);
             }, 40);
@@ -85,4 +87,6 @@ function spawnBot() {
     ws.on("error", cleanupAndSpawnNew);
 }
 
-for (let i = 0; i < MAX_OPEN_BOTS; i++) spawnBot();
+for (let i = 0; i < MAX_OPEN_BOTS; i++) {
+    setTimeout(spawnBot, i * 10);
+}
