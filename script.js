@@ -1,13 +1,19 @@
 const WebSocket = require("ws");
 const { TextEncoder } = require("util");
 
+process.on("uncaughtException", (err) => {
+    if (err.message.includes("WebSocket was closed before the connection was established")) return;
+    throw err;
+});
+
 const WS_URL = "wss://ip-207-148-8-148.cavegame.io";
 const encoder = new TextEncoder();
 
 const HARD_MAX_BOTS = 85;
 let TARGET_BOTS = 85;
+
 const TICK_RATE = 20;
-const MAX_SPAWN_PER_TICK = 20;
+const MAX_SPAWN_PER_TICK = 5;
 
 const HEARTBEAT_INTERVAL = 1000;
 const TEAM_INTERVAL = 1000;
@@ -74,15 +80,27 @@ function createBot() {
     const bot = {
         ws,
         joined: false,
-        destroyed: false, // ✅ added
+        destroyed: false,
+        opened: false,
+        connectTimeout: null,
         lastHeartbeat: 0,
         lastTeamTry: 0,
         lastInfinite: 0
     };
 
+    bot.connectTimeout = setTimeout(() => {
+        if (!bot.opened) {
+            destroyBot(bot);
+        }
+    }, 5000);
+
     ws.on("open", () => {
+        bot.opened = true;
+        clearTimeout(bot.connectTimeout);
+
         safeSend(ws, Uint8Array.from([48]));
         safeSend(ws, buildIntroPacket());
+
         failureScore = Math.max(0, failureScore - 2);
     });
 
@@ -94,41 +112,37 @@ function createBot() {
     });
 
     ws.on("close", () => destroyBot(bot));
-
-    // ✅ FIXED error handler
-    ws.on("error", () => {
-        if (!bot.destroyed && ws.readyState !== WebSocket.CLOSED) {
-            destroyBot(bot);
-        }
-    });
+    ws.on("error", () => {});
 
     bots.add(bot);
 }
 
 function destroyBot(bot) {
-    // ✅ prevent double destroy
     if (!bots.has(bot) || bot.destroyed) return;
     bot.destroyed = true;
 
     bots.delete(bot);
-    failureScore++;
+
+    if (!bot.joined) {
+        failureScore++;
+    }
 
     try {
         if (bot.ws) {
             bot.ws.removeAllListeners();
 
-            // ✅ SAFE terminate
-            if (
-                bot.ws.readyState === WebSocket.OPEN ||
-                bot.ws.readyState === WebSocket.CONNECTING
-            ) {
+            if (bot.opened) {
                 bot.ws.terminate();
+            } else {
+                try { bot.ws.close(); } catch {}
             }
         }
     } catch {}
 
     bot.ws = null;
-    botQueue.push(Date.now() + 50);
+
+    const delay = Math.min(10000, 200 + failureScore * 20);
+    botQueue.push(Date.now() + delay);
 }
 
 setInterval(() => {
@@ -142,12 +156,12 @@ setInterval(() => {
         botQueue[0] <= now
     ) {
         botQueue.shift();
-        createBot();
+        setTimeout(createBot, Math.random() * 100);
         spawned++;
     }
 
     while (spawned < MAX_SPAWN_PER_TICK && bots.size < TARGET_BOTS) {
-        createBot();
+        setTimeout(createBot, Math.random() * 100);
         spawned++;
     }
 
@@ -162,19 +176,19 @@ setInterval(() => {
 
         if (ws.readyState !== WebSocket.OPEN) continue;
 
-        if (now - bot.lastHeartbeat > HEARTBEAT_INTERVAL) {
+        if (Date.now() - bot.lastHeartbeat > HEARTBEAT_INTERVAL) {
             safeSend(ws, HEARTBEATS[hbIndex++ % 2]);
-            bot.lastHeartbeat = now;
+            bot.lastHeartbeat = Date.now();
         }
 
-        if (!bot.joined && now - bot.lastTeamTry > TEAM_INTERVAL) {
+        if (!bot.joined && Date.now() - bot.lastTeamTry > TEAM_INTERVAL) {
             safeSend(ws, TEAM_JOIN_PACKET);
-            bot.lastTeamTry = now;
+            bot.lastTeamTry = Date.now();
         }
 
-        if (bot.joined && now - bot.lastInfinite > INFINITE_INTERVAL) {
+        if (bot.joined && Date.now() - bot.lastInfinite > INFINITE_INTERVAL) {
             safeSend(ws, INFINITE_PACKET);
-            bot.lastInfinite = now;
+            bot.lastInfinite = Date.now();
         }
     }
 
