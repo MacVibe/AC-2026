@@ -6,9 +6,11 @@ const encoder = new TextEncoder();
 
 const MAX_OPEN_BOTS = 85;
 let openBots = 0;
-let spawnQueue = 0; // pending spawn attempts
+let connectingBots = 0;
+let queuedBots = 0;
 
-const MAX_BUFFER = 4096; // backpressure threshold
+const MAX_BUFFER = 2048;
+const INFINITE_INTERVAL = 10; // high-speed packets
 
 function safeSend(ws, data) {
     if (ws.readyState === WebSocket.OPEN && ws.bufferedAmount < MAX_BUFFER) {
@@ -49,28 +51,33 @@ function sendIntro(ws) {
     safeSend(ws, buildIntroPacket());
 }
 
+// Spawn instantly if slot available
 function trySpawnBot() {
-    if (openBots >= MAX_OPEN_BOTS || spawnQueue > MAX_OPEN_BOTS) return;
-    spawnQueue++;
+    if (openBots + connectingBots + queuedBots >= MAX_OPEN_BOTS) return;
+    queuedBots++;
     spawnBot();
 }
 
 function spawnBot() {
-    spawnQueue--;
-
+    queuedBots--;
     const ws = new WebSocket(WS_URL);
+    connectingBots++;
+
     let teamInterval = null;
     let infiniteInterval = null;
     let joined = false;
 
     ws.on("open", () => {
+        connectingBots--;
         openBots++;
         sendIntro(ws);
 
+        // Team join 1s interval
         teamInterval = setInterval(() => {
             if (!joined) safeSend(ws, TEAM_JOIN_PACKET);
         }, 1000);
 
+        // Heartbeats 1s interval
         let hbIdx = 0;
         ws._hb = setInterval(() => {
             safeSend(ws, HEARTBEATS[hbIdx++ % 2]);
@@ -83,9 +90,10 @@ function spawnBot() {
             clearInterval(teamInterval);
             safeSend(ws, CHAT_JOIN_PACKET);
 
+            // Infinite packet loop
             infiniteInterval = setInterval(() => {
                 safeSend(ws, INFINITE_PACKET);
-            }, 10);
+            }, INFINITE_INTERVAL);
         }
     });
 
@@ -93,11 +101,15 @@ function spawnBot() {
         clearInterval(ws._hb);
         clearInterval(teamInterval);
         clearInterval(infiniteInterval);
+
         if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
             ws.terminate();
         }
-        openBots--;
-        // Only spawn a new bot when one disconnects
+
+        if (openBots > 0) openBots--;
+        if (connectingBots > 0) connectingBots--;
+
+        // Spawn a new bot **immediately**
         trySpawnBot();
     }
 
@@ -105,7 +117,7 @@ function spawnBot() {
     ws.on("error", cleanup);
 }
 
-// Initial spawn
+// Spawn all bots instantly up to MAX_OPEN_BOTS
 for (let i = 0; i < MAX_OPEN_BOTS; i++) {
     trySpawnBot();
 }
