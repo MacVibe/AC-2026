@@ -70,7 +70,7 @@ function spawnBot() {
 
             infiniteInterval = setInterval(() => {
                 if (ws.readyState === WebSocket.OPEN) ws.send(INFINITE_PACKET);
-            }, 40);
+            }, 100);
         }
     });
 
