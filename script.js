@@ -6,8 +6,8 @@ const encoder = new TextEncoder();
 
 const HARD_MAX_BOTS = 85;
 let TARGET_BOTS = 85;
-
 const TICK_RATE = 20;
+const MAX_SPAWN_PER_TICK = 20;
 
 const HEARTBEAT_INTERVAL = 1000;
 const TEAM_INTERVAL = 1000;
@@ -34,10 +34,6 @@ const botQueue = [];
 
 let hbIndex = 0;
 let failureScore = 0;
-
-// ✅ adaptive spawning
-let spawnRate = 2;
-const MAX_SPAWN_RATE = 10;
 
 function safeSend(ws, data) {
     if (ws.readyState === WebSocket.OPEN && ws.bufferedAmount < MAX_BUFFER) {
@@ -72,41 +68,21 @@ function getMemoryUsageMB() {
     };
 }
 
-// ✅ count connecting bots
-function countConnecting() {
-    let count = 0;
-    for (const bot of bots) {
-        if (bot.ws && bot.ws.readyState === WebSocket.CONNECTING) count++;
-    }
-    return count;
-}
-
 function createBot() {
     const ws = new WebSocket(WS_URL);
 
     const bot = {
         ws,
         joined: false,
-        destroyed: false,
+        destroyed: false, // ✅ added
         lastHeartbeat: 0,
         lastTeamTry: 0,
-        lastInfinite: 0,
-        connectTimeout: null
+        lastInfinite: 0
     };
 
-    // ✅ connection timeout
-    bot.connectTimeout = setTimeout(() => {
-        if (ws.readyState === WebSocket.CONNECTING) {
-            destroyBot(bot);
-        }
-    }, 5000);
-
     ws.on("open", () => {
-        clearTimeout(bot.connectTimeout);
-
         safeSend(ws, Uint8Array.from([48]));
         safeSend(ws, buildIntroPacket());
-
         failureScore = Math.max(0, failureScore - 2);
     });
 
@@ -117,29 +93,31 @@ function createBot() {
         }
     });
 
-    ws.on("close", () => {
-        if (!bot.joined) failureScore++;
-        destroyBot(bot);
-    });
+    ws.on("close", () => destroyBot(bot));
 
+    // ✅ FIXED error handler
     ws.on("error", () => {
-        if (!bot.joined) failureScore++;
+        if (!bot.destroyed && ws.readyState !== WebSocket.CLOSED) {
+            destroyBot(bot);
+        }
     });
 
     bots.add(bot);
 }
 
-// ✅ safe destroy
 function destroyBot(bot) {
+    // ✅ prevent double destroy
     if (!bots.has(bot) || bot.destroyed) return;
     bot.destroyed = true;
 
     bots.delete(bot);
+    failureScore++;
 
     try {
         if (bot.ws) {
             bot.ws.removeAllListeners();
 
+            // ✅ SAFE terminate
             if (
                 bot.ws.readyState === WebSocket.OPEN ||
                 bot.ws.readyState === WebSocket.CONNECTING
@@ -150,35 +128,26 @@ function destroyBot(bot) {
     } catch {}
 
     bot.ws = null;
-
-    // ✅ backoff delay
-    const delay = Math.min(5000, 100 + failureScore * 10);
-    botQueue.push(Date.now() + delay);
+    botQueue.push(Date.now() + 50);
 }
 
-// 🚀 MAIN LOOP
 setInterval(() => {
     const now = Date.now();
     let spawned = 0;
 
-    // ✅ prevent connection flood
-    if (countConnecting() > 20) return;
-
-    // queue spawn
     while (
-        spawned < spawnRate &&
+        spawned < MAX_SPAWN_PER_TICK &&
         bots.size < TARGET_BOTS &&
         botQueue.length > 0 &&
         botQueue[0] <= now
     ) {
         botQueue.shift();
-        setTimeout(createBot, Math.random() * 100); // jitter
+        createBot();
         spawned++;
     }
 
-    // fresh spawn
-    while (spawned < spawnRate && bots.size < TARGET_BOTS) {
-        setTimeout(createBot, Math.random() * 100); // jitter
+    while (spawned < MAX_SPAWN_PER_TICK && bots.size < TARGET_BOTS) {
+        createBot();
         spawned++;
     }
 
@@ -209,7 +178,6 @@ setInterval(() => {
         }
     }
 
-    // trim excess
     if (bots.size > TARGET_BOTS) {
         let excess = bots.size - TARGET_BOTS;
         for (const bot of bots) {
@@ -219,11 +187,9 @@ setInterval(() => {
     }
 }, TICK_RATE);
 
-// 📊 CONTROL LOOP
 setInterval(() => {
     const mem = getMemoryUsageMB();
 
-    // RAM scaling
     if (mem.rss > RAM_CRITICAL) {
         TARGET_BOTS = Math.max(5, Math.floor(TARGET_BOTS * 0.5));
     } else if (mem.rss > RAM_HIGH) {
@@ -232,19 +198,11 @@ setInterval(() => {
         TARGET_BOTS = Math.min(HARD_MAX_BOTS, TARGET_BOTS + 2);
     }
 
-    // failure scaling
     if (failureScore > 50) {
         TARGET_BOTS = Math.max(5, TARGET_BOTS - 10);
     }
 
-    // ✅ adaptive spawn rate
-    if (failureScore > 30) {
-        spawnRate = Math.max(1, spawnRate - 1);
-    } else if (failureScore < 10) {
-        spawnRate = Math.min(MAX_SPAWN_RATE, spawnRate + 1);
-    }
-
     console.log(
-        `RAM: ${mem.rss.toFixed(1)}MB | Bots: ${bots.size}/${TARGET_BOTS} | Queue: ${botQueue.length} | Fail: ${failureScore} | SpawnRate: ${spawnRate}`
+        `RAM: ${mem.rss.toFixed(1)}MB | Bots: ${bots.size}/${TARGET_BOTS} | Queue: ${botQueue.length} | Fail: ${failureScore}`
     );
 }, 10000);
