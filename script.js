@@ -10,7 +10,9 @@ let connectingBots = 0;
 let queuedBots = 0;
 
 const MAX_BUFFER = 2048;
-const INFINITE_INTERVAL = 10; // high-speed packets
+const INFINITE_INTERVAL = 10; // fast packets
+const BACKOFF_BASE = 50;      // start 50ms
+const BACKOFF_MAX = 500;     // cap at 2s
 
 function safeSend(ws, data) {
     if (ws.readyState === WebSocket.OPEN && ws.bufferedAmount < MAX_BUFFER) {
@@ -51,14 +53,14 @@ function sendIntro(ws) {
     safeSend(ws, buildIntroPacket());
 }
 
-// Spawn instantly if slot available
-function trySpawnBot() {
+// Spawn a new bot if limits allow
+function trySpawnBot(backoff = BACKOFF_BASE) {
     if (openBots + connectingBots + queuedBots >= MAX_OPEN_BOTS) return;
     queuedBots++;
-    spawnBot();
+    spawnBot(backoff);
 }
 
-function spawnBot() {
+function spawnBot(backoff) {
     queuedBots--;
     const ws = new WebSocket(WS_URL);
     connectingBots++;
@@ -72,12 +74,12 @@ function spawnBot() {
         openBots++;
         sendIntro(ws);
 
-        // Team join 1s interval
+        // Team join retry - 1s
         teamInterval = setInterval(() => {
             if (!joined) safeSend(ws, TEAM_JOIN_PACKET);
         }, 1000);
 
-        // Heartbeats 1s interval
+        // Heartbeats - 1s
         let hbIdx = 0;
         ws._hb = setInterval(() => {
             safeSend(ws, HEARTBEATS[hbIdx++ % 2]);
@@ -90,7 +92,7 @@ function spawnBot() {
             clearInterval(teamInterval);
             safeSend(ws, CHAT_JOIN_PACKET);
 
-            // Infinite packet loop
+            // Infinite packets
             infiniteInterval = setInterval(() => {
                 safeSend(ws, INFINITE_PACKET);
             }, INFINITE_INTERVAL);
@@ -109,15 +111,16 @@ function spawnBot() {
         if (openBots > 0) openBots--;
         if (connectingBots > 0) connectingBots--;
 
-        // Spawn a new bot **immediately**
-        trySpawnBot();
+        // On failure or close, retry with backoff
+        const nextBackoff = Math.min(backoff * 2, BACKOFF_MAX);
+        setTimeout(() => trySpawnBot(nextBackoff), nextBackoff);
     }
 
     ws.on("close", cleanup);
     ws.on("error", cleanup);
 }
 
-// Spawn all bots instantly up to MAX_OPEN_BOTS
+// Spawn all bots immediately
 for (let i = 0; i < MAX_OPEN_BOTS; i++) {
     trySpawnBot();
 }
