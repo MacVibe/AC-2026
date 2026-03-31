@@ -14,7 +14,7 @@ const TEAM_INTERVAL = 1000;
 const INFINITE_INTERVAL = 10;
 
 const MAX_BUFFER = 512;
-const BUFFER_KILL = 1024;
+const BUFFER_KILL = 512;
 
 const RAM_HIGH = 300;
 const RAM_CRITICAL = 500;
