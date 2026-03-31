@@ -4,15 +4,36 @@ const { TextEncoder } = require("util");
 const WS_URL = "wss://ip-207-148-8-148.cavegame.io";
 const encoder = new TextEncoder();
 
-const MAX_OPEN_BOTS = 85;
-let openBots = 0;
-let connectingBots = 0;
-let queuedBots = 0;
+const HARD_MAX_BOTS = 85;
+let TARGET_BOTS = 85;
+const TICK_RATE = 20;
+const MAX_SPAWN_PER_TICK = 20;
 
-const MAX_BUFFER = 2048;
-const INFINITE_INTERVAL = 10; // fast packets
-const BACKOFF_BASE = 50;      // start 50ms
-const BACKOFF_MAX = 500;     // cap at 2s
+const HEARTBEAT_INTERVAL = 1000;
+const TEAM_INTERVAL = 1000;
+const INFINITE_INTERVAL = 10;
+
+const MAX_BUFFER = 512;
+const BUFFER_KILL = 1024;
+
+const RAM_HIGH = 300;
+const RAM_CRITICAL = 500;
+
+const TEAM_JOIN_PACKET = Uint8Array.from([49,31,47,116,101,97,109,32,106,111,105,110,32,84,101,115,116,101,114,115,32,103,51,56,57,56,101,110,97,107,108,49,48]);
+const TEAM_JOINED_PACKET = Uint8Array.from([24,0,0,12,84,101,97,109,32,106,111,105,110,101,100,33,4,103,111,111,100]);
+const CHAT_JOIN_PACKET = Uint8Array.from([49,10,47,116,101,97,109,32,99,104,97,116]);
+const INFINITE_PACKET = Uint8Array.from([49,120,0]);
+
+const HEARTBEATS = [
+    Uint8Array.from([34,0,0,0,0,0,64,128,0,192,195,166,192,0]),
+    Uint8Array.from([34,0,0,0,0,0,194,143,255,252,67,177,63,255])
+];
+
+const bots = new Set();
+const botQueue = [];
+
+let hbIndex = 0;
+let failureScore = 0;
 
 function safeSend(ws, data) {
     if (ws.readyState === WebSocket.OPEN && ws.bufferedAmount < MAX_BUFFER) {
@@ -21,7 +42,7 @@ function safeSend(ws, data) {
 }
 
 function buildIntroPacket() {
-    const name = encoder.encode("\uD83D\uDD11" + Math.floor(Math.random() * 1000));
+    const name = encoder.encode("🔑" + Math.floor(Math.random() * 1000));
     const packet = new Uint8Array(3 + name.length);
     packet[0] = 31;
     packet[1] = 1;
@@ -29,15 +50,6 @@ function buildIntroPacket() {
     packet.set(name, 3);
     return packet;
 }
-
-const TEAM_JOIN_PACKET = Uint8Array.from([49,31,47,116,101,97,109,32,106,111,105,110,32,84,101,115,116,101,114,115,32,103,51,56,57,56,101,110,97,107,108,49,48]);
-const TEAM_JOINED_PACKET = Uint8Array.from([24,0,0,12,84,101,97,109,32,106,111,105,110,101,100,33,4,103,111,111,100]);
-const CHAT_JOIN_PACKET = Uint8Array.from([49,10,47,116,101,97,109,32,99,104,97,116]);
-const INFINITE_PACKET = Uint8Array.from([49,120,0]);
-const HEARTBEATS = [
-    Uint8Array.from([34,0,0,0,0,0,64,128,0,192,195,166,192,0]),
-    Uint8Array.from([34,0,0,0,0,0,194,143,255,252,67,177,63,255])
-];
 
 function isExactTeamJoined(data) {
     const bytes = new Uint8Array(data);
@@ -48,79 +60,106 @@ function isExactTeamJoined(data) {
     return true;
 }
 
-function sendIntro(ws) {
-    safeSend(ws, Uint8Array.from([48]));
-    safeSend(ws, buildIntroPacket());
+function getMemoryUsageMB() {
+    const mem = process.memoryUsage();
+    return {
+        rss: mem.rss / 1024 / 1024,
+        heapUsed: mem.heapUsed / 1024 / 1024
+    };
 }
 
-// Spawn a new bot if limits allow
-function trySpawnBot(backoff = BACKOFF_BASE) {
-    if (openBots + connectingBots + queuedBots >= MAX_OPEN_BOTS) return;
-    queuedBots++;
-    spawnBot(backoff);
-}
-
-function spawnBot(backoff) {
-    queuedBots--;
+function createBot() {
     const ws = new WebSocket(WS_URL);
-    connectingBots++;
-
-    let teamInterval = null;
-    let infiniteInterval = null;
-    let joined = false;
-
+    const bot = {
+        ws,
+        joined: false,
+        lastHeartbeat: 0,
+        lastTeamTry: 0,
+        lastInfinite: 0
+    };
     ws.on("open", () => {
-        connectingBots--;
-        openBots++;
-        sendIntro(ws);
-
-        // Team join retry - 1s
-        teamInterval = setInterval(() => {
-            if (!joined) safeSend(ws, TEAM_JOIN_PACKET);
-        }, 1000);
-
-        // Heartbeats - 1s
-        let hbIdx = 0;
-        ws._hb = setInterval(() => {
-            safeSend(ws, HEARTBEATS[hbIdx++ % 2]);
-        }, 1000);
+        safeSend(ws, Uint8Array.from([48]));
+        safeSend(ws, buildIntroPacket());
+        failureScore = Math.max(0, failureScore - 2);
     });
-
     ws.on("message", (data) => {
-        if (!joined && isExactTeamJoined(data)) {
-            joined = true;
-            clearInterval(teamInterval);
+        if (!bot.joined && isExactTeamJoined(data)) {
+            bot.joined = true;
             safeSend(ws, CHAT_JOIN_PACKET);
-
-            // Infinite packets
-            infiniteInterval = setInterval(() => {
-                safeSend(ws, INFINITE_PACKET);
-            }, INFINITE_INTERVAL);
         }
     });
+    ws.on("close", () => destroyBot(bot));
+    ws.on("error", () => destroyBot(bot));
+    bots.add(bot);
+}
 
-    function cleanup() {
-        clearInterval(ws._hb);
-        clearInterval(teamInterval);
-        clearInterval(infiniteInterval);
+function destroyBot(bot) {
+    if (!bots.has(bot)) return;
+    bots.delete(bot);
+    failureScore++;
+    try {
+        bot.ws.removeAllListeners();
+        bot.ws.terminate();
+    } catch {}
+    bot.ws = null;
+    botQueue.push(Date.now() + 50);
+}
 
-        if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
-            ws.terminate();
-        }
-
-        if (openBots > 0) openBots--;
-        if (connectingBots > 0) connectingBots--;
-
-        // On failure or close, retry with backoff
-        const nextBackoff = Math.min(backoff * 2, BACKOFF_MAX);
-        setTimeout(() => trySpawnBot(nextBackoff), nextBackoff);
+setInterval(() => {
+    const now = Date.now();
+    let spawned = 0;
+    while (spawned < MAX_SPAWN_PER_TICK && bots.size < TARGET_BOTS && botQueue.length > 0 && botQueue[0] <= now) {
+        botQueue.shift();
+        createBot();
+        spawned++;
     }
+    while (spawned < MAX_SPAWN_PER_TICK && bots.size < TARGET_BOTS) {
+        createBot();
+        spawned++;
+    }
+    for (const bot of bots) {
+        const ws = bot.ws;
+        if (!ws) continue;
+        if (ws.bufferedAmount > BUFFER_KILL) {
+            destroyBot(bot);
+            continue;
+        }
+        if (ws.readyState !== WebSocket.OPEN) continue;
+        if (now - bot.lastHeartbeat > HEARTBEAT_INTERVAL) {
+            safeSend(ws, HEARTBEATS[hbIndex++ % 2]);
+            bot.lastHeartbeat = now;
+        }
+        if (!bot.joined && now - bot.lastTeamTry > TEAM_INTERVAL) {
+            safeSend(ws, TEAM_JOIN_PACKET);
+            bot.lastTeamTry = now;
+        }
+        if (bot.joined && now - bot.lastInfinite > INFINITE_INTERVAL) {
+            safeSend(ws, INFINITE_PACKET);
+            bot.lastInfinite = now;
+        }
+    }
+    if (bots.size > TARGET_BOTS) {
+        let excess = bots.size - TARGET_BOTS;
+        for (const bot of bots) {
+            destroyBot(bot);
+            if (--excess <= 0) break;
+        }
+    }
+}, TICK_RATE);
 
-    ws.on("close", cleanup);
-    ws.on("error", cleanup);
-}
-
-// Spawn all bots immediately
-for (let i = 0; i < MAX_OPEN_BOTS; i++) {
-    trySpawnBot();
-}
+setInterval(() => {
+    const mem = getMemoryUsageMB();
+    if (mem.rss > RAM_CRITICAL) {
+        TARGET_BOTS = Math.max(5, Math.floor(TARGET_BOTS * 0.5));
+    } else if (mem.rss > RAM_HIGH) {
+        TARGET_BOTS = Math.max(10, TARGET_BOTS - 5);
+    } else if (mem.rss < RAM_HIGH * 0.7) {
+        TARGET_BOTS = Math.min(HARD_MAX_BOTS, TARGET_BOTS + 2);
+    }
+    if (failureScore > 50) {
+        TARGET_BOTS = Math.max(5, TARGET_BOTS - 10);
+    }
+    console.log(
+        `RAM: ${mem.rss.toFixed(1)}MB | Bots: ${bots.size}/${TARGET_BOTS} | Queue: ${botQueue.length} | Fail: ${failureScore}`
+    );
+}, 10000);
