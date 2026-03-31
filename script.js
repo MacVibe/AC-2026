@@ -6,6 +6,15 @@ const encoder = new TextEncoder();
 
 const MAX_OPEN_BOTS = 30;
 let openBots = 0;
+let spawnQueue = 0; // pending spawn attempts
+
+const MAX_BUFFER = 4096; // backpressure threshold
+
+function safeSend(ws, data) {
+    if (ws.readyState === WebSocket.OPEN && ws.bufferedAmount < MAX_BUFFER) {
+        ws.send(data);
+    }
+}
 
 function buildIntroPacket() {
     const name = encoder.encode("\uD83D\uDD11" + Math.floor(Math.random() * 1000));
@@ -36,13 +45,18 @@ function isExactTeamJoined(data) {
 }
 
 function sendIntro(ws) {
-    ws.send(Uint8Array.from([48]));
-    ws.send(buildIntroPacket());
+    safeSend(ws, Uint8Array.from([48]));
+    safeSend(ws, buildIntroPacket());
+}
+
+function trySpawnBot() {
+    if (openBots >= MAX_OPEN_BOTS || spawnQueue > MAX_OPEN_BOTS) return;
+    spawnQueue++;
+    spawnBot();
 }
 
 function spawnBot() {
-    if (openBots >= MAX_OPEN_BOTS) return;
-    openBots++;
+    spawnQueue--;
 
     const ws = new WebSocket(WS_URL);
     let teamInterval = null;
@@ -50,15 +64,16 @@ function spawnBot() {
     let joined = false;
 
     ws.on("open", () => {
+        openBots++;
         sendIntro(ws);
 
         teamInterval = setInterval(() => {
-            if (ws.readyState === WebSocket.OPEN && !joined) ws.send(TEAM_JOIN_PACKET);
+            if (!joined) safeSend(ws, TEAM_JOIN_PACKET);
         }, 1000);
 
         let hbIdx = 0;
         ws._hb = setInterval(() => {
-            if (ws.readyState === WebSocket.OPEN) ws.send(HEARTBEATS[hbIdx++ % 2]);
+            safeSend(ws, HEARTBEATS[hbIdx++ % 2]);
         }, 1000);
     });
 
@@ -66,27 +81,31 @@ function spawnBot() {
         if (!joined && isExactTeamJoined(data)) {
             joined = true;
             clearInterval(teamInterval);
-            ws.send(CHAT_JOIN_PACKET);
+            safeSend(ws, CHAT_JOIN_PACKET);
 
             infiniteInterval = setInterval(() => {
-                if (ws.readyState === WebSocket.OPEN) ws.send(INFINITE_PACKET);
+                safeSend(ws, INFINITE_PACKET);
             }, 10);
         }
     });
 
-    function cleanupAndSpawnNew() {
+    function cleanup() {
         clearInterval(ws._hb);
         clearInterval(teamInterval);
         clearInterval(infiniteInterval);
-        if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) ws.terminate();
+        if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+            ws.terminate();
+        }
         openBots--;
-        setTimeout(spawnBot, 20);
+        // Only spawn a new bot when one disconnects
+        trySpawnBot();
     }
 
-    ws.on("close", cleanupAndSpawnNew);
-    ws.on("error", cleanupAndSpawnNew);
+    ws.on("close", cleanup);
+    ws.on("error", cleanup);
 }
 
+// Initial spawn
 for (let i = 0; i < MAX_OPEN_BOTS; i++) {
-    setTimeout(spawnBot, i * 10);
+    trySpawnBot();
 }
