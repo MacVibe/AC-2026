@@ -78,7 +78,7 @@ function spawnBot() {
         clearInterval(infiniteInterval);
         if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) ws.terminate();
         openBots--;
-        setTimeout(spawnBot, 0);
+        setTimeout(spawnBot, 10);
     }
 
     ws.on("close", cleanupAndSpawnNew);
