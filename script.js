@@ -4,7 +4,7 @@ const { TextEncoder } = require("util");
 const WS_URL = "wss://ip-207-148-8-148.cavegame.io";
 const encoder = new TextEncoder();
 
-const MAX_OPEN_BOTS = 84;
+const MAX_OPEN_BOTS = 30;
 let openBots = 0;
 
 function buildIntroPacket() {
@@ -70,7 +70,7 @@ function spawnBot() {
 
             infiniteInterval = setInterval(() => {
                 if (ws.readyState === WebSocket.OPEN) ws.send(INFINITE_PACKET);
-            }, 100);
+            }, 10);
         }
     });
 
