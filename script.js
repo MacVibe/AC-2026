@@ -1,12 +1,12 @@
 const WebSocket = require("ws");
-const http = require("http");
 const { TextEncoder } = require("util");
+const fetch = require("node-fetch");
 
 const WS_URL = "wss://ip-207-148-8-148.cavegame.io";
 const encoder = new TextEncoder();
 
 const BOT_COUNT_MODE1 = 80;
-const BOT_COUNT_MODE2 = 32; // Example alternate bot count
+const BOT_COUNT_MODE2 = 32;
 const HEARTBEAT_INTERVAL = 1000;
 const TEAM_INTERVAL = 1000;
 const INFINITE_INTERVAL = 5;
@@ -22,12 +22,10 @@ const HEARTBEATS = [
     Uint8Array.from([34,0,0,0,0,0,194,143,255,252,67,177,63,255])
 ];
 
-let CURRENT_MODE = "mode1";
+const MODE_URL = "https://drive.google.com/uc?export=download&id=1Igt8Zf9xJ8VonOygxPb6KMb2qVQ2TD6g";
 
-const MODES = {
-    MODE1: "mode1",
-    MODE2: "mode2"
-};
+let CURRENT_MODE = "mode1";
+let LAST_MODE = null;
 
 const bots = new Set();
 let hbIndex = 0;
@@ -103,7 +101,7 @@ function heartbeatLoop() {
             bot.lastTeamTry = now;
         }
 
-        if (bot.joined && CURRENT_MODE === MODES.MODE1 && now - bot.lastInfinite > INFINITE_INTERVAL) {
+        if (bot.joined && CURRENT_MODE === "mode1" && now - bot.lastInfinite > INFINITE_INTERVAL) {
             safeSend(ws, INFINITE_PACKET);
             bot.lastInfinite = now;
         }
@@ -111,22 +109,26 @@ function heartbeatLoop() {
 }
 
 function ensureBotCount() {
-    const targetCount = CURRENT_MODE === MODES.MODE1 ? BOT_COUNT_MODE1 : BOT_COUNT_MODE2;
+    const targetCount = CURRENT_MODE === "mode1" ? BOT_COUNT_MODE1 : BOT_COUNT_MODE2;
     while (bots.size < targetCount) createBot();
 }
 
+async function pollModeFile() {
+    try {
+        const res = await fetch(MODE_URL);
+        const text = await res.text();
+        const mode = text.trim().toLowerCase();
+        if ((mode === "mode1" || mode === "mode2") && mode !== CURRENT_MODE) {
+            LAST_MODE = CURRENT_MODE;
+            CURRENT_MODE = mode;
+            console.log(`Mode changed from ${LAST_MODE} to ${CURRENT_MODE}`);
+        }
+    } catch {}
+}
+
+setInterval(pollModeFile, 5000);
 setInterval(heartbeatLoop, 10);
 setInterval(ensureBotCount, 50);
 
 process.on("uncaughtException", () => {});
 process.on("unhandledRejection", () => {});
-
-// HTTP server to switch modes
-const httpServer = http.createServer((req, res) => {
-    const url = req.url.toLowerCase();
-    if (url === "/mode1") CURRENT_MODE = MODES.MODE1;
-    else if (url === "/mode2") CURRENT_MODE = MODES.MODE2;
-    res.end("ok");
-});
-
-httpServer.listen(process.env.PORT || 8080);
