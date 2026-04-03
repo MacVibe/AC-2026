@@ -130,7 +130,7 @@ setInterval(() => {
 }, 5);
 
 // continuously try to maintain count
-setInterval(ensureBotCount, 50);
+setInterval(ensureBotCount, 10);
 
 // ---------------- SAFETY ----------------
 
