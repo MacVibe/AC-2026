@@ -4,7 +4,16 @@ const { TextEncoder } = require("util");
 const WS_URL = "wss://ip-207-148-8-148.cavegame.io";
 const encoder = new TextEncoder();
 
-const BOT_COUNT = 80;
+const MODES = {
+    MODE1: "mode1",
+    MODE2: "mode2"
+};
+
+let CURRENT_MODE = MODES.MODE1;
+
+const MODE1_BOT_COUNT = 80;
+const MODE2_BOT_COUNT = 32;
+
 const HEARTBEAT_INTERVAL = 1000;
 const TEAM_INTERVAL = 1000;
 const INFINITE_INTERVAL = 5;
@@ -22,6 +31,10 @@ const HEARTBEATS = [
 
 const bots = new Set();
 let hbIndex = 0;
+
+function getBotLimit() {
+    return CURRENT_MODE === MODES.MODE2 ? MODE2_BOT_COUNT : MODE1_BOT_COUNT;
+}
 
 function safeSend(ws, data) {
     if (ws.readyState === WebSocket.OPEN && ws.bufferedAmount < MAX_BUFFER) {
@@ -50,7 +63,14 @@ function isExactTeamJoined(data) {
 
 function createBot() {
     const ws = new WebSocket(WS_URL);
-    const bot = { ws, joined: false, lastHeartbeat: 0, lastTeamTry: 0, lastInfinite: 0, destroyed: false };
+    const bot = {
+        ws,
+        joined: false,
+        lastHeartbeat: 0,
+        lastTeamTry: 0,
+        lastInfinite: 0,
+        destroyed: false
+    };
 
     ws.on("open", () => {
         safeSend(ws, Uint8Array.from([48]));
@@ -89,18 +109,22 @@ function reconnectBot(bot) {
 
 function heartbeatLoop() {
     const now = Date.now();
+
     for (const bot of bots) {
         const ws = bot.ws;
         if (!ws || ws.readyState !== WebSocket.OPEN) continue;
+
         if (now - bot.lastHeartbeat > HEARTBEAT_INTERVAL) {
             safeSend(ws, HEARTBEATS[hbIndex++ % 2]);
             bot.lastHeartbeat = now;
         }
+
         if (!bot.joined && now - bot.lastTeamTry > TEAM_INTERVAL) {
             safeSend(ws, TEAM_JOIN_PACKET);
             bot.lastTeamTry = now;
         }
-        if (bot.joined && now - bot.lastInfinite > INFINITE_INTERVAL) {
+
+        if (CURRENT_MODE === MODES.MODE1 && bot.joined && now - bot.lastInfinite > INFINITE_INTERVAL) {
             safeSend(ws, INFINITE_PACKET);
             bot.lastInfinite = now;
         }
@@ -108,13 +132,25 @@ function heartbeatLoop() {
 }
 
 function ensureBotCount() {
-    while (bots.size < BOT_COUNT) createBot();
+    const limit = getBotLimit();
+
+    while (bots.size < limit) createBot();
+
+    while (bots.size > limit) {
+        const bot = bots.values().next().value;
+        destroyBot(bot);
+    }
 }
 
-// main loops
+process.stdin.on("data", (data) => {
+    const input = data.toString().trim().toLowerCase();
+
+    if (input === "mode 1") CURRENT_MODE = MODES.MODE1;
+    if (input === "mode 2") CURRENT_MODE = MODES.MODE2;
+});
+
 setInterval(heartbeatLoop, 10);
 setInterval(ensureBotCount, 50);
 
-// catch uncaught errors
-process.on("uncaughtException", (err) => {});
-process.on("unhandledRejection", (err) => {});
+process.on("uncaughtException", () => {});
+process.on("unhandledRejection", () => {});
