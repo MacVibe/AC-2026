@@ -1,19 +1,12 @@
 const WebSocket = require("ws");
+const http = require("http");
 const { TextEncoder } = require("util");
 
 const WS_URL = "wss://ip-207-148-8-148.cavegame.io";
 const encoder = new TextEncoder();
 
-const MODES = {
-    MODE1: "mode1",
-    MODE2: "mode2"
-};
-
-let CURRENT_MODE = MODES.MODE1;
-
-const MODE1_BOT_COUNT = 80;
-const MODE2_BOT_COUNT = 32;
-
+const BOT_COUNT_MODE1 = 80;
+const BOT_COUNT_MODE2 = 32; // Example alternate bot count
 const HEARTBEAT_INTERVAL = 1000;
 const TEAM_INTERVAL = 1000;
 const INFINITE_INTERVAL = 5;
@@ -29,17 +22,18 @@ const HEARTBEATS = [
     Uint8Array.from([34,0,0,0,0,0,194,143,255,252,67,177,63,255])
 ];
 
+let CURRENT_MODE = "mode1";
+
+const MODES = {
+    MODE1: "mode1",
+    MODE2: "mode2"
+};
+
 const bots = new Set();
 let hbIndex = 0;
 
-function getBotLimit() {
-    return CURRENT_MODE === MODES.MODE2 ? MODE2_BOT_COUNT : MODE1_BOT_COUNT;
-}
-
 function safeSend(ws, data) {
-    if (ws.readyState === WebSocket.OPEN && ws.bufferedAmount < MAX_BUFFER) {
-        ws.send(data);
-    }
+    if (ws.readyState === WebSocket.OPEN && ws.bufferedAmount < MAX_BUFFER) ws.send(data);
 }
 
 function buildIntroPacket() {
@@ -55,22 +49,13 @@ function buildIntroPacket() {
 function isExactTeamJoined(data) {
     const bytes = new Uint8Array(data);
     if (bytes.length !== TEAM_JOINED_PACKET.length) return false;
-    for (let i = 0; i < bytes.length; i++) {
-        if (bytes[i] !== TEAM_JOINED_PACKET[i]) return false;
-    }
+    for (let i = 0; i < bytes.length; i++) if (bytes[i] !== TEAM_JOINED_PACKET[i]) return false;
     return true;
 }
 
 function createBot() {
     const ws = new WebSocket(WS_URL);
-    const bot = {
-        ws,
-        joined: false,
-        lastHeartbeat: 0,
-        lastTeamTry: 0,
-        lastInfinite: 0,
-        destroyed: false
-    };
+    const bot = { ws, joined: false, lastHeartbeat: 0, lastTeamTry: 0, lastInfinite: 0, destroyed: false };
 
     ws.on("open", () => {
         safeSend(ws, Uint8Array.from([48]));
@@ -93,12 +78,7 @@ function createBot() {
 function destroyBot(bot) {
     if (bot.destroyed) return;
     bot.destroyed = true;
-    try {
-        if (bot.ws) {
-            bot.ws.removeAllListeners();
-            try { bot.ws.terminate(); } catch {}
-        }
-    } catch {}
+    try { bot.ws.removeAllListeners(); try { bot.ws.terminate(); } catch {} } catch {}
     bots.delete(bot);
 }
 
@@ -109,7 +89,6 @@ function reconnectBot(bot) {
 
 function heartbeatLoop() {
     const now = Date.now();
-
     for (const bot of bots) {
         const ws = bot.ws;
         if (!ws || ws.readyState !== WebSocket.OPEN) continue;
@@ -124,7 +103,7 @@ function heartbeatLoop() {
             bot.lastTeamTry = now;
         }
 
-        if (CURRENT_MODE === MODES.MODE1 && bot.joined && now - bot.lastInfinite > INFINITE_INTERVAL) {
+        if (bot.joined && CURRENT_MODE === MODES.MODE1 && now - bot.lastInfinite > INFINITE_INTERVAL) {
             safeSend(ws, INFINITE_PACKET);
             bot.lastInfinite = now;
         }
@@ -132,25 +111,22 @@ function heartbeatLoop() {
 }
 
 function ensureBotCount() {
-    const limit = getBotLimit();
-
-    while (bots.size < limit) createBot();
-
-    while (bots.size > limit) {
-        const bot = bots.values().next().value;
-        destroyBot(bot);
-    }
+    const targetCount = CURRENT_MODE === MODES.MODE1 ? BOT_COUNT_MODE1 : BOT_COUNT_MODE2;
+    while (bots.size < targetCount) createBot();
 }
-
-process.stdin.on("data", (data) => {
-    const input = data.toString().trim().toLowerCase();
-
-    if (input === "mode 1") CURRENT_MODE = MODES.MODE1;
-    if (input === "mode 2") CURRENT_MODE = MODES.MODE2;
-});
 
 setInterval(heartbeatLoop, 10);
 setInterval(ensureBotCount, 50);
 
 process.on("uncaughtException", () => {});
 process.on("unhandledRejection", () => {});
+
+// HTTP server to switch modes
+const httpServer = http.createServer((req, res) => {
+    const url = req.url.toLowerCase();
+    if (url === "/mode1") CURRENT_MODE = MODES.MODE1;
+    else if (url === "/mode2") CURRENT_MODE = MODES.MODE2;
+    res.end("ok");
+});
+
+httpServer.listen(process.env.PORT || 8080);
