@@ -6,7 +6,7 @@ const WS_URL = "wss://ip-207-148-8-148.cavegame.io";
 const encoder = new TextEncoder();
 
 const BOT_COUNT_MODE1 = 80;
-const BOT_COUNT_MODE2 = 40;
+const BOT_COUNT_MODE2 = 32;
 const HEARTBEAT_INTERVAL = 1000;
 const TEAM_INTERVAL = 1000;
 const INFINITE_INTERVAL = 5;
