@@ -112,8 +112,8 @@ function ensureBotCount() {
 }
 
 // main loops
-setInterval(heartbeatLoop, 1000);
-setInterval(ensureBotCount, 100);
+setInterval(heartbeatLoop, 10);
+setInterval(ensureBotCount, 50);
 
 // catch uncaught errors
 process.on("uncaughtException", (err) => {});
