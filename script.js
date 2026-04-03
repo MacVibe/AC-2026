@@ -124,7 +124,7 @@ async function pollModeFile() {
     } catch {}
 }
 
-setInterval(pollModeFile, 5000);
+setInterval(pollModeFile, 3000);
 setInterval(heartbeatLoop, 10);
 setInterval(ensureBotCount, 50);
 
