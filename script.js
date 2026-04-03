@@ -1,14 +1,12 @@
 const WebSocket = require("ws");
 const { TextEncoder } = require("util");
 
-// Google Drive direct download URL
 const MODE_URL = "https://drive.google.com/uc?export=download&id=1Igt8Zf9xJ8VonOygxPb6KMb2qVQ2TD6g";
-
 const WS_URL = "wss://ip-207-148-8-148.cavegame.io";
 const encoder = new TextEncoder();
 
 const BOT_COUNT_MODE1 = 80;
-const BOT_COUNT_MODE2 = 32;
+const BOT_COUNT_MODE2 = 40;
 const HEARTBEAT_INTERVAL = 1000;
 const TEAM_INTERVAL = 1000;
 const INFINITE_INTERVAL = 5;
@@ -31,9 +29,7 @@ const bots = new Set();
 let hbIndex = 0;
 
 function safeSend(ws, data) {
-    if (ws.readyState === WebSocket.OPEN && ws.bufferedAmount < MAX_BUFFER) {
-        ws.send(data);
-    }
+    if (ws.readyState === WebSocket.OPEN && ws.bufferedAmount < MAX_BUFFER) ws.send(data);
 }
 
 function buildIntroPacket() {
@@ -49,9 +45,7 @@ function buildIntroPacket() {
 function isExactTeamJoined(data) {
     const bytes = new Uint8Array(data);
     if (bytes.length !== TEAM_JOINED_PACKET.length) return false;
-    for (let i = 0; i < bytes.length; i++) {
-        if (bytes[i] !== TEAM_JOINED_PACKET[i]) return false;
-    }
+    for (let i = 0; i < bytes.length; i++) if (bytes[i] !== TEAM_JOINED_PACKET[i]) return false;
     return true;
 }
 
@@ -80,12 +74,7 @@ function createBot() {
 function destroyBot(bot) {
     if (bot.destroyed) return;
     bot.destroyed = true;
-    try {
-        if (bot.ws) {
-            bot.ws.removeAllListeners();
-            try { bot.ws.terminate(); } catch {}
-        }
-    } catch {}
+    try { bot.ws.removeAllListeners(); try { bot.ws.terminate(); } catch {} } catch {}
     bots.delete(bot);
 }
 
