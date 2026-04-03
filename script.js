@@ -54,7 +54,8 @@ function createBot() {
     const bot = { ws, joined: false, lastHeartbeat: 0, lastTeamTry: 0, lastInfinite: 0, destroyed: false };
 
     ws.on("open", () => {
-        safeSend(ws, Uint8Array.from([48]));
+        safeSend(ws, Uint8Array.from([48])); 
+        safeSend(ws, Uint8Array.from([49,120,78,111,46,46,32,73,32,99,97,110,39,116,32,108,97,117,103,104,32,121,101,116,44,32,73,39,118,101,32,103,111,116,32,116,111,32,104,111,108,100,32,105,116,32,105,110,46])); 
         safeSend(ws, buildIntroPacket());
     });
 
