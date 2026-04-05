@@ -1,6 +1,7 @@
 const WebSocket = require("ws");
 const { TextEncoder } = require("util");
 
+const MODE_URL = "https://drive.google.com/uc?export=download&id=1Igt8Zf9xJ8VonOygxPb6KMb2qVQ2TD6g";
 const WS_URL = "wss://ip-207-148-8-148.cavegame.io";
 const encoder = new TextEncoder();
 
@@ -9,7 +10,7 @@ const BOT_COUNT_MODE2 = 32;
 
 const HEARTBEAT_INTERVAL = 1000;
 const TEAM_INTERVAL = 1000;
-const INFINITE_INTERVAL = 5; // 🔥 restored
+const INFINITE_INTERVAL = 5;
 
 const MAX_BUFFER = 5000;
 
@@ -24,17 +25,12 @@ const HEARTBEATS = [
 ];
 
 let CURRENT_MODE = "mode1";
-let hbIndex = 0;
-
 const bots = new Set();
 
 function safeSend(ws, data, force = false) {
     if (ws.readyState !== WebSocket.OPEN) return;
-
-    // 🔑 Force heartbeats, throttle everything else
-    if (force || ws.bufferedAmount < MAX_BUFFER) {
-        ws.send(data);
-    }
+    if (force) return ws.send(data);
+    if (ws.bufferedAmount < MAX_BUFFER) ws.send(data);
 }
 
 function buildIntroPacket() {
@@ -50,9 +46,7 @@ function buildIntroPacket() {
 function isExactTeamJoined(data) {
     const bytes = new Uint8Array(data);
     if (bytes.length !== TEAM_JOINED_PACKET.length) return false;
-    for (let i = 0; i < bytes.length; i++) {
-        if (bytes[i] !== TEAM_JOINED_PACKET[i]) return false;
-    }
+    for (let i = 0; i < bytes.length; i++) if (bytes[i] !== TEAM_JOINED_PACKET[i]) return false;
     return true;
 }
 
@@ -64,6 +58,7 @@ function createBot() {
         joined: false,
         destroyed: false,
         intervals: [],
+        hbIndex: 0,
         lastInfinite: 0
     };
 
@@ -72,32 +67,25 @@ function createBot() {
         safeSend(ws, buildIntroPacket());
         safeSend(ws, Uint8Array.from([49,33,47,116,101,97,109,32,99,114,101,97,116,101,32,84,101,115,116,101,114,115,32,103,51,56,57,56,101,110,97,107,108,49,48]));
 
-        // ❤️ HEARTBEAT (never blocked)
         bot.intervals.push(setInterval(() => {
-            safeSend(ws, HEARTBEATS[hbIndex++ % 2], true);
+            const packet = HEARTBEATS[bot.hbIndex % 2];
+            bot.hbIndex++;
+            safeSend(ws, packet, true);
         }, HEARTBEAT_INTERVAL));
 
-        // 👥 TEAM JOIN RETRY
         bot.intervals.push(setInterval(() => {
-            if (!bot.joined) {
-                safeSend(ws, TEAM_JOIN_PACKET);
-            }
+            if (!bot.joined) safeSend(ws, TEAM_JOIN_PACKET);
         }, TEAM_INTERVAL));
 
-        // ♾️ FAST SPAM (with micro-throttle)
         bot.intervals.push(setInterval(() => {
             if (!bot.joined || CURRENT_MODE !== "mode1") return;
-
             const now = Date.now();
-
-            // 🔑 Prevent total buffer lock
             if (now - bot.lastInfinite < INFINITE_INTERVAL) return;
-
             if (ws.bufferedAmount < MAX_BUFFER) {
                 safeSend(ws, INFINITE_PACKET);
                 bot.lastInfinite = now;
             }
-        }, 1)); // run fast, but self-throttle
+        }, 1));
     });
 
     ws.on("message", (data) => {
@@ -130,18 +118,16 @@ function destroyBot(bot) {
 function reconnectBot(bot) {
     destroyBot(bot);
 
-    // 🔁 ORIGINAL STYLE RANDOM DELAY
     setTimeout(() => {
-        ensureBotCount();
+        const target = CURRENT_MODE === "mode1" ? BOT_COUNT_MODE1 : BOT_COUNT_MODE2;
+        if (bots.size < target) createBot();
     }, 500 + Math.random() * 500);
 }
 
 function ensureBotCount() {
     const target = CURRENT_MODE === "mode1" ? BOT_COUNT_MODE1 : BOT_COUNT_MODE2;
 
-    while (bots.size < target) {
-        createBot();
-    }
+    while (bots.size < target) createBot();
 
     if (bots.size > target) {
         let excess = bots.size - target;
@@ -152,21 +138,38 @@ function ensureBotCount() {
     }
 }
 
-async function pollModeFile() {
+function applyModeChange(newMode) {
+    if (newMode === CURRENT_MODE) return;
+    CURRENT_MODE = newMode;
+    ensureBotCount();
+}
+
+async function fetchInitialMode() {
     try {
-        const res = await fetch("https://drive.google.com/uc?export=download&id=1Igt8Zf9xJ8VonOygxPb6KMb2qVQ2TD6g");
+        const res = await fetch(MODE_URL);
         const txt = await res.text();
         const mode = txt.trim().toLowerCase();
-
-        if ((mode === "mode1" || mode === "mode2") && mode !== CURRENT_MODE) {
-            console.log(`Mode changed: ${CURRENT_MODE} → ${mode}`);
-            CURRENT_MODE = mode;
-        }
+        if (mode === "mode1" || mode === "mode2") CURRENT_MODE = mode;
     } catch {}
 }
 
-setInterval(pollModeFile, 3000);
-setInterval(ensureBotCount, 500);
+async function pollModeFile() {
+    try {
+        const res = await fetch(MODE_URL);
+        const txt = await res.text();
+        const mode = txt.trim().toLowerCase();
+        if (mode === "mode1" || mode === "mode2") applyModeChange(mode);
+    } catch {}
+}
+
+async function init() {
+    await fetchInitialMode();
+    ensureBotCount();
+    setInterval(pollModeFile, 3000);
+    setInterval(ensureBotCount, 500);
+}
+
+init();
 
 process.on("uncaughtException", () => {});
 process.on("unhandledRejection", () => {});
