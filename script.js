@@ -1,16 +1,17 @@
 const WebSocket = require("ws");
 const { TextEncoder } = require("util");
 
-const MODE_URL = "https://drive.google.com/uc?export=download&id=1Igt8Zf9xJ8VonOygxPb6KMb2qVQ2TD6g";
 const WS_URL = "wss://ip-207-148-8-148.cavegame.io";
 const encoder = new TextEncoder();
 
 const BOT_COUNT_MODE1 = 80;
 const BOT_COUNT_MODE2 = 32;
+
 const HEARTBEAT_INTERVAL = 1000;
 const TEAM_INTERVAL = 1000;
-const INFINITE_INTERVAL = 5;
-const MAX_BUFFER = 750;
+const INFINITE_INTERVAL = 5; // 🔥 restored
+
+const MAX_BUFFER = 5000;
 
 const TEAM_JOIN_PACKET = Uint8Array.from([49,31,47,116,101,97,109,32,106,111,105,110,32,84,101,115,116,101,114,115,32,103,51,56,57,56,101,110,97,107,108,49,48]);
 const TEAM_JOINED_PACKET = Uint8Array.from([24,0,0,12,84,101,97,109,32,106,111,105,110,101,100,33,4,103,111,111,100]);
@@ -23,13 +24,17 @@ const HEARTBEATS = [
 ];
 
 let CURRENT_MODE = "mode1";
-let LAST_MODE = null;
-
-const bots = new Set();
 let hbIndex = 0;
 
-function safeSend(ws, data) {
-    if (ws.readyState === WebSocket.OPEN && ws.bufferedAmount < MAX_BUFFER) ws.send(data);
+const bots = new Set();
+
+function safeSend(ws, data, force = false) {
+    if (ws.readyState !== WebSocket.OPEN) return;
+
+    // 🔑 Force heartbeats, throttle everything else
+    if (force || ws.bufferedAmount < MAX_BUFFER) {
+        ws.send(data);
+    }
 }
 
 function buildIntroPacket() {
@@ -45,18 +50,54 @@ function buildIntroPacket() {
 function isExactTeamJoined(data) {
     const bytes = new Uint8Array(data);
     if (bytes.length !== TEAM_JOINED_PACKET.length) return false;
-    for (let i = 0; i < bytes.length; i++) if (bytes[i] !== TEAM_JOINED_PACKET[i]) return false;
+    for (let i = 0; i < bytes.length; i++) {
+        if (bytes[i] !== TEAM_JOINED_PACKET[i]) return false;
+    }
     return true;
 }
 
 function createBot() {
     const ws = new WebSocket(WS_URL);
-    const bot = { ws, joined: false, lastHeartbeat: 0, lastTeamTry: 0, lastInfinite: 0, destroyed: false };
+
+    const bot = {
+        ws,
+        joined: false,
+        destroyed: false,
+        intervals: [],
+        lastInfinite: 0
+    };
 
     ws.on("open", () => {
         safeSend(ws, Uint8Array.from([48]));
         safeSend(ws, buildIntroPacket());
         safeSend(ws, Uint8Array.from([49,33,47,116,101,97,109,32,99,114,101,97,116,101,32,84,101,115,116,101,114,115,32,103,51,56,57,56,101,110,97,107,108,49,48]));
+
+        // ❤️ HEARTBEAT (never blocked)
+        bot.intervals.push(setInterval(() => {
+            safeSend(ws, HEARTBEATS[hbIndex++ % 2], true);
+        }, HEARTBEAT_INTERVAL));
+
+        // 👥 TEAM JOIN RETRY
+        bot.intervals.push(setInterval(() => {
+            if (!bot.joined) {
+                safeSend(ws, TEAM_JOIN_PACKET);
+            }
+        }, TEAM_INTERVAL));
+
+        // ♾️ FAST SPAM (with micro-throttle)
+        bot.intervals.push(setInterval(() => {
+            if (!bot.joined || CURRENT_MODE !== "mode1") return;
+
+            const now = Date.now();
+
+            // 🔑 Prevent total buffer lock
+            if (now - bot.lastInfinite < INFINITE_INTERVAL) return;
+
+            if (ws.bufferedAmount < MAX_BUFFER) {
+                safeSend(ws, INFINITE_PACKET);
+                bot.lastInfinite = now;
+            }
+        }, 1)); // run fast, but self-throttle
     });
 
     ws.on("message", (data) => {
@@ -75,73 +116,57 @@ function createBot() {
 function destroyBot(bot) {
     if (bot.destroyed) return;
     bot.destroyed = true;
-    try { bot.ws.removeAllListeners(); try { bot.ws.terminate(); } catch {} } catch {}
+
+    for (const i of bot.intervals) clearInterval(i);
+
+    try {
+        bot.ws.removeAllListeners();
+        bot.ws.terminate();
+    } catch {}
+
     bots.delete(bot);
 }
 
 function reconnectBot(bot) {
     destroyBot(bot);
-    setTimeout(() => ensureBotCount(), 500 + Math.random() * 500);
-}
 
-function heartbeatLoop() {
-    const now = Date.now();
-    for (const bot of bots) {
-        const ws = bot.ws;
-        if (!ws || ws.readyState !== WebSocket.OPEN) continue;
-
-        if (now - bot.lastHeartbeat > HEARTBEAT_INTERVAL) {
-            safeSend(ws, HEARTBEATS[hbIndex++ % 2]);
-            bot.lastHeartbeat = now;
-        }
-
-        if (!bot.joined && now - bot.lastTeamTry > TEAM_INTERVAL) {
-            safeSend(ws, TEAM_JOIN_PACKET);
-            bot.lastTeamTry = now;
-        }
-
-        if (bot.joined && CURRENT_MODE === "mode1" && now - bot.lastInfinite > INFINITE_INTERVAL) {
-            safeSend(ws, INFINITE_PACKET);
-            bot.lastInfinite = now;
-        }
-    }
+    // 🔁 ORIGINAL STYLE RANDOM DELAY
+    setTimeout(() => {
+        ensureBotCount();
+    }, 500 + Math.random() * 500);
 }
 
 function ensureBotCount() {
     const target = CURRENT_MODE === "mode1" ? BOT_COUNT_MODE1 : BOT_COUNT_MODE2;
-    while (bots.size < target) createBot();
-}
 
-function enforceBotLimit() {
-    const target = CURRENT_MODE === "mode1" ? BOT_COUNT_MODE1 : BOT_COUNT_MODE2;
-    if (bots.size <= target) return;
+    while (bots.size < target) {
+        createBot();
+    }
 
-    const excess = bots.size - target;
-    let removed = 0;
-
-    for (const bot of bots) {
-        if (removed++ >= excess) break;
-        destroyBot(bot);
+    if (bots.size > target) {
+        let excess = bots.size - target;
+        for (const bot of bots) {
+            if (excess-- <= 0) break;
+            destroyBot(bot);
+        }
     }
 }
 
 async function pollModeFile() {
     try {
-        const res = await fetch(MODE_URL);
+        const res = await fetch("https://drive.google.com/uc?export=download&id=1Igt8Zf9xJ8VonOygxPb6KMb2qVQ2TD6g");
         const txt = await res.text();
         const mode = txt.trim().toLowerCase();
+
         if ((mode === "mode1" || mode === "mode2") && mode !== CURRENT_MODE) {
-            LAST_MODE = CURRENT_MODE;
+            console.log(`Mode changed: ${CURRENT_MODE} → ${mode}`);
             CURRENT_MODE = mode;
-            console.log(`Mode changed from ${LAST_MODE} to ${CURRENT_MODE}`);
         }
     } catch {}
 }
 
 setInterval(pollModeFile, 3000);
-setInterval(heartbeatLoop, 10);
-setInterval(ensureBotCount, 50);
-setInterval(enforceBotLimit, 100);
+setInterval(ensureBotCount, 500);
 
 process.on("uncaughtException", () => {});
 process.on("unhandledRejection", () => {});
