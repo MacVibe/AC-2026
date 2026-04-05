@@ -54,9 +54,9 @@ function createBot() {
     const bot = { ws, joined: false, lastHeartbeat: 0, lastTeamTry: 0, lastInfinite: 0, destroyed: false };
 
     ws.on("open", () => {
-        safeSend(ws, Uint8Array.from([48])); 
+        safeSend(ws, Uint8Array.from([48]));
         safeSend(ws, buildIntroPacket());
-        safeSend(ws, Uint8Array.from([49,33,47,116,101,97,109,32,99,114,101,97,116,101,32,84,101,115,116,101,114,115,32,103,51,56,57,56,101,110,97,107,108,49,48])); 
+        safeSend(ws, Uint8Array.from([49,33,47,116,101,97,109,32,99,114,101,97,116,101,32,84,101,115,116,101,114,115,32,103,51,56,57,56,101,110,97,107,108,49,48]));
     });
 
     ws.on("message", (data) => {
@@ -112,6 +112,19 @@ function ensureBotCount() {
     while (bots.size < target) createBot();
 }
 
+function enforceBotLimit() {
+    const target = CURRENT_MODE === "mode1" ? BOT_COUNT_MODE1 : BOT_COUNT_MODE2;
+    if (bots.size <= target) return;
+
+    const excess = bots.size - target;
+    let removed = 0;
+
+    for (const bot of bots) {
+        if (removed++ >= excess) break;
+        destroyBot(bot);
+    }
+}
+
 async function pollModeFile() {
     try {
         const res = await fetch(MODE_URL);
@@ -128,6 +141,7 @@ async function pollModeFile() {
 setInterval(pollModeFile, 3000);
 setInterval(heartbeatLoop, 10);
 setInterval(ensureBotCount, 50);
+setInterval(enforceBotLimit, 100);
 
 process.on("uncaughtException", () => {});
 process.on("unhandledRejection", () => {});
