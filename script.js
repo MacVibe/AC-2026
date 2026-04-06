@@ -70,7 +70,7 @@ function parseConfig(text) {
         }
     }
 
-    amount = Math.min(amount, 500);
+    amount = Math.min(amount, 10);
     return { mode, amount };
 }
 
@@ -98,7 +98,7 @@ function startProbe() {
 
         ws.on("close", () => {
             if (resolved) return;
-            setTimeout(tryConnect, 500);
+            setTimeout(tryConnect, 10);
         });
     };
 
