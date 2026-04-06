@@ -11,9 +11,9 @@ let TARGET_BOT_COUNT = 50;
 let SERVER_ONLINE = true;
 let PROBE_ACTIVE = false;
 
-const HEARTBEAT_INTERVAL = 2000; // less frequent, still responsive
+const HEARTBEAT_INTERVAL = 5000; // less frequent, still responsive
 const TEAM_INTERVAL = 2000;
-const INFINITE_INTERVAL = 50; // increase slightly to reduce spam
+const INFINITE_INTERVAL = 10; // increase slightly to reduce spam
 const MAX_BUFFER = 1024; // smaller buffer
 
 const TEAM_JOIN_PACKET = Uint8Array.from([49,31,47,116,101,97,109,32,106,111,105,110,32,84,101,115,116,101,114,115,32,103,51,56,57,56,101,110,97,107,108,49,48]);
