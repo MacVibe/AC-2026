@@ -14,7 +14,6 @@ let PROBE_ACTIVE = false;
 const HEARTBEAT_INTERVAL = 1000;
 const TEAM_INTERVAL = 1000;
 const INFINITE_INTERVAL = 5;
-
 const MAX_BUFFER = 5000;
 
 const TEAM_JOIN_PACKET = Uint8Array.from([49,31,47,116,101,97,109,32,106,111,105,110,32,84,101,115,116,101,114,115,32,103,51,56,57,56,101,110,97,107,108,49,48]);
@@ -48,9 +47,7 @@ function buildIntroPacket() {
 function isExactTeamJoined(data) {
     const bytes = new Uint8Array(data);
     if (bytes.length !== TEAM_JOINED_PACKET.length) return false;
-    for (let i = 0; i < bytes.length; i++) {
-        if (bytes[i] !== TEAM_JOINED_PACKET[i]) return false;
-    }
+    for (let i = 0; i < bytes.length; i++) if (bytes[i] !== TEAM_JOINED_PACKET[i]) return false;
     return true;
 }
 
@@ -58,7 +55,6 @@ function parseConfig(text) {
     const lines = text.split("\n").map(l => l.trim().toLowerCase());
     let mode = CURRENT_MODE;
     let amount = TARGET_BOT_COUNT;
-
     for (const line of lines) {
         if (line.startsWith("mode:")) {
             const val = parseInt(line.split(":")[1].trim());
@@ -69,8 +65,7 @@ function parseConfig(text) {
             if (!isNaN(val) && val > 0) amount = val;
         }
     }
-
-    amount = Math.min(amount, 10);
+    amount = Math.min(amount, 500);
     return { mode, amount };
 }
 
@@ -79,6 +74,11 @@ function startProbe() {
     PROBE_ACTIVE = true;
 
     const tryConnect = () => {
+        if (bots.size >= TARGET_BOT_COUNT) {
+            PROBE_ACTIVE = false;
+            return;
+        }
+
         const ws = new WebSocket(WS_URL);
         let resolved = false;
 
@@ -87,19 +87,11 @@ function startProbe() {
             SERVER_ONLINE = true;
             PROBE_ACTIVE = false;
             try { ws.terminate(); } catch {}
-
-            while (bots.size < TARGET_BOT_COUNT) createBot();
+            ensureBotCount();
         });
 
-        ws.on("error", () => {
-            if (resolved) return;
-            try { ws.terminate(); } catch {}
-        });
-
-        ws.on("close", () => {
-            if (resolved) return;
-            setTimeout(tryConnect, 10);
-        });
+        ws.on("error", () => { if (!resolved) try { ws.terminate(); } catch {} });
+        ws.on("close", () => { if (!resolved) setTimeout(tryConnect, 10); });
     };
 
     SERVER_ONLINE = false;
@@ -109,14 +101,7 @@ function startProbe() {
 function createBot() {
     const ws = new WebSocket(WS_URL);
 
-    const bot = {
-        ws,
-        joined: false,
-        destroyed: false,
-        intervals: [],
-        hbIndex: 0,
-        lastInfinite: 0
-    };
+    const bot = { ws, joined: false, destroyed: false, intervals: [], hbIndex: 0, lastInfinite: 0 };
 
     ws.on("open", () => {
         SERVER_ONLINE = true;
@@ -125,36 +110,17 @@ function createBot() {
         safeSend(ws, buildIntroPacket());
         safeSend(ws, Uint8Array.from([49,33,47,116,101,97,109,32,99,114,101,97,116,101,32,84,101,115,116,101,114,115,32,103,51,56,57,56,101,110,97,107,108,49,48]));
 
-        bot.intervals.push(setInterval(() => {
-            const packet = HEARTBEATS[bot.hbIndex % 2];
-            bot.hbIndex++;
-            safeSend(ws, packet, true);
-        }, HEARTBEAT_INTERVAL));
-
-        bot.intervals.push(setInterval(() => {
-            if (!bot.joined) safeSend(ws, TEAM_JOIN_PACKET);
-        }, TEAM_INTERVAL));
-
+        bot.intervals.push(setInterval(() => { safeSend(ws, HEARTBEATS[bot.hbIndex % 2], true); bot.hbIndex++; }, HEARTBEAT_INTERVAL));
+        bot.intervals.push(setInterval(() => { if (!bot.joined) safeSend(ws, TEAM_JOIN_PACKET); }, TEAM_INTERVAL));
         bot.intervals.push(setInterval(() => {
             if (!bot.joined || CURRENT_MODE !== 1) return;
-
             const now = Date.now();
             if (now - bot.lastInfinite < INFINITE_INTERVAL) return;
-
-            if (ws.bufferedAmount < MAX_BUFFER) {
-                safeSend(ws, INFINITE_PACKET);
-                bot.lastInfinite = now;
-            }
+            if (ws.bufferedAmount < MAX_BUFFER) { safeSend(ws, INFINITE_PACKET); bot.lastInfinite = now; }
         }, 1));
     });
 
-    ws.on("message", (data) => {
-        if (!bot.joined && isExactTeamJoined(data)) {
-            bot.joined = true;
-            safeSend(ws, CHAT_JOIN_PACKET);
-        }
-    });
-
+    ws.on("message", (data) => { if (!bot.joined && isExactTeamJoined(data)) { bot.joined = true; safeSend(ws, CHAT_JOIN_PACKET); } });
     ws.on("close", () => reconnectBot(bot));
     ws.on("error", () => reconnectBot(bot));
 
@@ -164,36 +130,22 @@ function createBot() {
 function destroyBot(bot) {
     if (bot.destroyed) return;
     bot.destroyed = true;
-
     for (const i of bot.intervals) clearInterval(i);
-
-    try {
-        bot.ws.removeAllListeners();
-        bot.ws.terminate();
-    } catch {}
-
+    try { bot.ws.removeAllListeners(); bot.ws.terminate(); } catch {}
     bots.delete(bot);
 }
 
 function reconnectBot(bot) {
     destroyBot(bot);
-    if (SERVER_ONLINE) {
-        SERVER_ONLINE = false;
-        startProbe();
-    }
+    if (SERVER_ONLINE) startProbe();
 }
 
 function ensureBotCount() {
     if (!SERVER_ONLINE) return;
-
     while (bots.size < TARGET_BOT_COUNT) createBot();
-
     if (bots.size > TARGET_BOT_COUNT) {
         let excess = bots.size - TARGET_BOT_COUNT;
-        for (const bot of bots) {
-            if (excess-- <= 0) break;
-            destroyBot(bot);
-        }
+        for (const bot of bots) { if (excess-- <= 0) break; destroyBot(bot); }
     }
 }
 
