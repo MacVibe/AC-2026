@@ -5,8 +5,11 @@ const MODE_URL = "https://drive.google.com/uc?export=download&id=1Igt8Zf9xJ8VonO
 const WS_URL = "wss://ip-207-148-8-148.cavegame.io";
 const encoder = new TextEncoder();
 
-const BOT_COUNT_MODE1 = 80;
-const BOT_COUNT_MODE2 = 32;
+let CURRENT_MODE = 1;
+let TARGET_BOT_COUNT = 80;
+
+let SERVER_ONLINE = true;
+let PROBE_ACTIVE = false;
 
 const HEARTBEAT_INTERVAL = 1000;
 const TEAM_INTERVAL = 1000;
@@ -24,7 +27,6 @@ const HEARTBEATS = [
     Uint8Array.from([34,0,0,0,0,0,194,143,255,252,67,177,63,255])
 ];
 
-let CURRENT_MODE = "mode1";
 const bots = new Set();
 
 function safeSend(ws, data, force = false) {
@@ -46,8 +48,62 @@ function buildIntroPacket() {
 function isExactTeamJoined(data) {
     const bytes = new Uint8Array(data);
     if (bytes.length !== TEAM_JOINED_PACKET.length) return false;
-    for (let i = 0; i < bytes.length; i++) if (bytes[i] !== TEAM_JOINED_PACKET[i]) return false;
+    for (let i = 0; i < bytes.length; i++) {
+        if (bytes[i] !== TEAM_JOINED_PACKET[i]) return false;
+    }
     return true;
+}
+
+function parseConfig(text) {
+    const lines = text.split("\n").map(l => l.trim().toLowerCase());
+    let mode = CURRENT_MODE;
+    let amount = TARGET_BOT_COUNT;
+
+    for (const line of lines) {
+        if (line.startsWith("mode:")) {
+            const val = parseInt(line.split(":")[1].trim());
+            if (val === 1 || val === 2) mode = val;
+        }
+        if (line.startsWith("amount:")) {
+            const val = parseInt(line.split(":")[1].trim());
+            if (!isNaN(val) && val > 0) amount = val;
+        }
+    }
+
+    amount = Math.min(amount, 500);
+    return { mode, amount };
+}
+
+function startProbe() {
+    if (PROBE_ACTIVE) return;
+    PROBE_ACTIVE = true;
+
+    const tryConnect = () => {
+        const ws = new WebSocket(WS_URL);
+        let resolved = false;
+
+        ws.on("open", () => {
+            resolved = true;
+            SERVER_ONLINE = true;
+            PROBE_ACTIVE = false;
+            try { ws.terminate(); } catch {}
+
+            while (bots.size < TARGET_BOT_COUNT) createBot();
+        });
+
+        ws.on("error", () => {
+            if (resolved) return;
+            try { ws.terminate(); } catch {}
+        });
+
+        ws.on("close", () => {
+            if (resolved) return;
+            setTimeout(tryConnect, 500);
+        });
+    };
+
+    SERVER_ONLINE = false;
+    tryConnect();
 }
 
 function createBot() {
@@ -63,6 +119,8 @@ function createBot() {
     };
 
     ws.on("open", () => {
+        SERVER_ONLINE = true;
+
         safeSend(ws, Uint8Array.from([48]));
         safeSend(ws, buildIntroPacket());
         safeSend(ws, Uint8Array.from([49,33,47,116,101,97,109,32,99,114,101,97,116,101,32,84,101,115,116,101,114,115,32,103,51,56,57,56,101,110,97,107,108,49,48]));
@@ -78,9 +136,11 @@ function createBot() {
         }, TEAM_INTERVAL));
 
         bot.intervals.push(setInterval(() => {
-            if (!bot.joined || CURRENT_MODE !== "mode1") return;
+            if (!bot.joined || CURRENT_MODE !== 1) return;
+
             const now = Date.now();
             if (now - bot.lastInfinite < INFINITE_INTERVAL) return;
+
             if (ws.bufferedAmount < MAX_BUFFER) {
                 safeSend(ws, INFINITE_PACKET);
                 bot.lastInfinite = now;
@@ -117,20 +177,19 @@ function destroyBot(bot) {
 
 function reconnectBot(bot) {
     destroyBot(bot);
-
-    setTimeout(() => {
-        const target = CURRENT_MODE === "mode1" ? BOT_COUNT_MODE1 : BOT_COUNT_MODE2;
-        if (bots.size < target) createBot();
-    }, 500 + Math.random() * 500);
+    if (SERVER_ONLINE) {
+        SERVER_ONLINE = false;
+        startProbe();
+    }
 }
 
 function ensureBotCount() {
-    const target = CURRENT_MODE === "mode1" ? BOT_COUNT_MODE1 : BOT_COUNT_MODE2;
+    if (!SERVER_ONLINE) return;
 
-    while (bots.size < target) createBot();
+    while (bots.size < TARGET_BOT_COUNT) createBot();
 
-    if (bots.size > target) {
-        let excess = bots.size - target;
+    if (bots.size > TARGET_BOT_COUNT) {
+        let excess = bots.size - TARGET_BOT_COUNT;
         for (const bot of bots) {
             if (excess-- <= 0) break;
             destroyBot(bot);
@@ -138,34 +197,35 @@ function ensureBotCount() {
     }
 }
 
-function applyModeChange(newMode) {
-    if (newMode === CURRENT_MODE) return;
+function applyConfig(newMode, newAmount) {
     CURRENT_MODE = newMode;
+    TARGET_BOT_COUNT = newAmount;
     ensureBotCount();
 }
 
-async function fetchInitialMode() {
+async function fetchInitialConfig() {
     try {
         const res = await fetch(MODE_URL);
         const txt = await res.text();
-        const mode = txt.trim().toLowerCase();
-        if (mode === "mode1" || mode === "mode2") CURRENT_MODE = mode;
+        const { mode, amount } = parseConfig(txt);
+        CURRENT_MODE = mode;
+        TARGET_BOT_COUNT = amount;
     } catch {}
 }
 
-async function pollModeFile() {
+async function pollConfigFile() {
     try {
         const res = await fetch(MODE_URL);
         const txt = await res.text();
-        const mode = txt.trim().toLowerCase();
-        if (mode === "mode1" || mode === "mode2") applyModeChange(mode);
+        const { mode, amount } = parseConfig(txt);
+        applyConfig(mode, amount);
     } catch {}
 }
 
 async function init() {
-    await fetchInitialMode();
+    await fetchInitialConfig();
     ensureBotCount();
-    setInterval(pollModeFile, 3000);
+    setInterval(pollConfigFile, 3000);
     setInterval(ensureBotCount, 500);
 }
 
