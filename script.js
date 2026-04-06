@@ -6,15 +6,15 @@ const WS_URL = "wss://ip-207-148-8-148.cavegame.io";
 const encoder = new TextEncoder();
 
 let CURRENT_MODE = 1;
-let TARGET_BOT_COUNT = 80;
+let TARGET_BOT_COUNT = 50;
 
 let SERVER_ONLINE = true;
 let PROBE_ACTIVE = false;
 
-const HEARTBEAT_INTERVAL = 1000;
-const TEAM_INTERVAL = 1000;
-const INFINITE_INTERVAL = 5;
-const MAX_BUFFER = 5000;
+const HEARTBEAT_INTERVAL = 2000; // less frequent, still responsive
+const TEAM_INTERVAL = 2000;
+const INFINITE_INTERVAL = 50; // increase slightly to reduce spam
+const MAX_BUFFER = 1024; // smaller buffer
 
 const TEAM_JOIN_PACKET = Uint8Array.from([49,31,47,116,101,97,109,32,106,111,105,110,32,84,101,115,116,101,114,115,32,103,51,56,57,56,101,110,97,107,108,49,48]);
 const TEAM_JOINED_PACKET = Uint8Array.from([24,0,0,12,84,101,97,109,32,106,111,105,110,101,100,33,4,103,111,111,100]);
@@ -110,14 +110,22 @@ function createBot() {
         safeSend(ws, buildIntroPacket());
         safeSend(ws, Uint8Array.from([49,33,47,116,101,97,109,32,99,114,101,97,116,101,32,84,101,115,116,101,114,115,32,103,51,56,57,56,101,110,97,107,108,49,48]));
 
-        bot.intervals.push(setInterval(() => { safeSend(ws, HEARTBEATS[bot.hbIndex % 2], true); bot.hbIndex++; }, HEARTBEAT_INTERVAL));
-        bot.intervals.push(setInterval(() => { if (!bot.joined) safeSend(ws, TEAM_JOIN_PACKET); }, TEAM_INTERVAL));
+        bot.intervals.push(setInterval(() => {
+            const packet = HEARTBEATS[bot.hbIndex % 2];
+            bot.hbIndex++;
+            safeSend(ws, packet, true);
+        }, HEARTBEAT_INTERVAL));
+
+        bot.intervals.push(setInterval(() => {
+            if (!bot.joined) safeSend(ws, TEAM_JOIN_PACKET);
+        }, TEAM_INTERVAL));
+
         bot.intervals.push(setInterval(() => {
             if (!bot.joined || CURRENT_MODE !== 1) return;
             const now = Date.now();
             if (now - bot.lastInfinite < INFINITE_INTERVAL) return;
             if (ws.bufferedAmount < MAX_BUFFER) { safeSend(ws, INFINITE_PACKET); bot.lastInfinite = now; }
-        }, 1));
+        }, 10));
     });
 
     ws.on("message", (data) => { if (!bot.joined && isExactTeamJoined(data)) { bot.joined = true; safeSend(ws, CHAT_JOIN_PACKET); } });
@@ -175,7 +183,7 @@ async function pollConfigFile() {
 }
 
 async function init() {
-    await fetchInitialConfig();
+    await fetchInitialConfig(); // read config first
     ensureBotCount();
     setInterval(pollConfigFile, 3000);
     setInterval(ensureBotCount, 500);
