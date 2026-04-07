@@ -11,10 +11,10 @@ let TARGET_BOT_COUNT = 50;
 let SERVER_ONLINE = true;
 let PROBE_ACTIVE = false;
 
-const HEARTBEAT_INTERVAL = 5000; // less frequent, still responsive
+const HEARTBEAT_INTERVAL = 5000;
 const TEAM_INTERVAL = 2000;
-const INFINITE_INTERVAL = 7; // increase slightly to reduce spam
-const MAX_BUFFER = 1024; // smaller buffer
+const INFINITE_INTERVAL = 7;
+const MAX_BUFFER = 1024;
 
 const TEAM_JOIN_PACKET = Uint8Array.from([49,31,47,116,101,97,109,32,106,111,105,110,32,84,101,115,116,101,114,115,32,103,51,56,57,56,101,110,97,107,108,49,48]);
 const TEAM_JOINED_PACKET = Uint8Array.from([24,0,0,12,84,101,97,109,32,106,111,105,110,101,100,33,4,103,111,111,100]);
@@ -52,19 +52,21 @@ function isExactTeamJoined(data) {
 }
 
 function parseConfig(text) {
-    const lines = text.split("\n").map(l => l.trim().toLowerCase());
+    const lines = text.replace(/\r/g, "").split("\n").map(l => l.trim().toLowerCase());
     let mode = CURRENT_MODE;
     let amount = TARGET_BOT_COUNT;
+
     for (const line of lines) {
         if (line.startsWith("mode:")) {
-            const val = parseInt(line.split(":")[1].trim());
+            const val = parseInt(line.split(":")[1]?.trim());
             if (val === 1 || val === 2) mode = val;
         }
         if (line.startsWith("amount:")) {
-            const val = parseInt(line.split(":")[1].trim());
+            const val = parseInt(line.split(":")[1]?.trim());
             if (!isNaN(val) && val > 0) amount = val;
         }
     }
+
     amount = Math.min(amount, 500);
     return { mode, amount };
 }
@@ -124,11 +126,20 @@ function createBot() {
             if (!bot.joined || CURRENT_MODE !== 1) return;
             const now = Date.now();
             if (now - bot.lastInfinite < INFINITE_INTERVAL) return;
-            if (ws.bufferedAmount < MAX_BUFFER) { safeSend(ws, INFINITE_PACKET); bot.lastInfinite = now; }
+            if (ws.bufferedAmount < MAX_BUFFER) {
+                safeSend(ws, INFINITE_PACKET);
+                bot.lastInfinite = now;
+            }
         }, 10));
     });
 
-    ws.on("message", (data) => { if (!bot.joined && isExactTeamJoined(data)) { bot.joined = true; safeSend(ws, CHAT_JOIN_PACKET); } });
+    ws.on("message", (data) => {
+        if (!bot.joined && isExactTeamJoined(data)) {
+            bot.joined = true;
+            safeSend(ws, CHAT_JOIN_PACKET);
+        }
+    });
+
     ws.on("close", () => reconnectBot(bot));
     ws.on("error", () => reconnectBot(bot));
 
@@ -150,43 +161,84 @@ function reconnectBot(bot) {
 
 function ensureBotCount() {
     if (!SERVER_ONLINE) return;
+
     while (bots.size < TARGET_BOT_COUNT) createBot();
+
     if (bots.size > TARGET_BOT_COUNT) {
         let excess = bots.size - TARGET_BOT_COUNT;
-        for (const bot of bots) { if (excess-- <= 0) break; destroyBot(bot); }
+        for (const bot of bots) {
+            if (excess-- <= 0) break;
+            destroyBot(bot);
+        }
     }
 }
 
+function applyModeToAllBots() {
+    for (const bot of bots) {
+        if (bot.destroyed) continue;
+        destroyBot(bot);
+    }
+    ensureBotCount();
+}
+
 function applyConfig(newMode, newAmount) {
+    const oldMode = CURRENT_MODE;
+    const oldAmount = TARGET_BOT_COUNT;
+
+    const modeChanged = newMode !== oldMode;
+    const amountChanged = newAmount !== oldAmount;
+
+    if (!modeChanged && !amountChanged) return;
+
+    if (modeChanged) {
+        console.log(`Mode: ${oldMode} -> ${newMode}`);
+    }
+    if (amountChanged) {
+        console.log(`Target Amount: ${oldAmount} -> ${newAmount}`);
+    }
+
     CURRENT_MODE = newMode;
     TARGET_BOT_COUNT = newAmount;
+
+    if (modeChanged) applyModeToAllBots();
+
     ensureBotCount();
 }
 
 async function fetchInitialConfig() {
     try {
-        const res = await fetch(MODE_URL);
+        const res = await fetch(MODE_URL + "&t=" + Date.now());
         const txt = await res.text();
+
         const { mode, amount } = parseConfig(txt);
+
+        console.log(`Initial Mode: ${mode}`);
+        console.log(`Initial Target Amount: ${amount}`);
+
         CURRENT_MODE = mode;
         TARGET_BOT_COUNT = amount;
-    } catch {}
+    } catch (err) {
+        console.error("Initial config error:", err);
+    }
 }
 
 async function pollConfigFile() {
     try {
-        const res = await fetch(MODE_URL);
+        const res = await fetch(MODE_URL + "&t=" + Date.now());
         const txt = await res.text();
+
         const { mode, amount } = parseConfig(txt);
         applyConfig(mode, amount);
-    } catch {}
+    } catch (err) {
+        console.error("Config fetch error:", err);
+    }
 }
 
 async function init() {
-    await fetchInitialConfig(); // read config first
+    await fetchInitialConfig();
     ensureBotCount();
     setInterval(pollConfigFile, 3000);
-    setInterval(ensureBotCount, 500);
+    setInterval(ensureBotCount, 100);
 }
 
 init();
