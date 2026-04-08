@@ -47,7 +47,9 @@ function buildIntroPacket() {
 function isExactTeamJoined(data) {
     const bytes = new Uint8Array(data);
     if (bytes.length !== TEAM_JOINED_PACKET.length) return false;
-    for (let i = 0; i < bytes.length; i++) if (bytes[i] !== TEAM_JOINED_PACKET[i]) return false;
+    for (let i = 0; i < bytes.length; i++) {
+        if (bytes[i] !== TEAM_JOINED_PACKET[i]) return false;
+    }
     return true;
 }
 
@@ -149,8 +151,14 @@ function createBot() {
 function destroyBot(bot) {
     if (bot.destroyed) return;
     bot.destroyed = true;
+
     for (const i of bot.intervals) clearInterval(i);
-    try { bot.ws.removeAllListeners(); bot.ws.terminate(); } catch {}
+
+    try {
+        bot.ws.removeAllListeners();
+        bot.ws.terminate();
+    } catch {}
+
     bots.delete(bot);
 }
 
@@ -164,38 +172,46 @@ function ensureBotCount() {
 
     while (bots.size < TARGET_BOT_COUNT) createBot();
 
-    if (bots.size > TARGET_BOT_COUNT) {
-        let excess = bots.size - TARGET_BOT_COUNT;
-        for (const bot of bots) {
-            if (excess-- <= 0) break;
-            destroyBot(bot);
-        }
+    if (bots.size <= TARGET_BOT_COUNT) return;
+
+    let excess = bots.size - TARGET_BOT_COUNT;
+
+    const snapshot = Array.from(bots);
+
+    const queued = [];
+    const connected = [];
+
+    for (const bot of snapshot) {
+        if (bot.destroyed) continue;
+        if (bot.joined) connected.push(bot);
+        else queued.push(bot);
+    }
+
+    for (const bot of queued) {
+        if (excess <= 0) break;
+        destroyBot(bot);
+        excess--;
+    }
+
+    for (const bot of connected) {
+        if (excess <= 0) break;
+        destroyBot(bot);
+        excess--;
     }
 }
 
 function applyModeToAllBots() {
-    for (const bot of bots) {
-        if (bot.destroyed) continue;
+    for (const bot of Array.from(bots)) {
         destroyBot(bot);
     }
     ensureBotCount();
 }
 
 function applyConfig(newMode, newAmount) {
-    const oldMode = CURRENT_MODE;
-    const oldAmount = TARGET_BOT_COUNT;
-
-    const modeChanged = newMode !== oldMode;
-    const amountChanged = newAmount !== oldAmount;
+    const modeChanged = newMode !== CURRENT_MODE;
+    const amountChanged = newAmount !== TARGET_BOT_COUNT;
 
     if (!modeChanged && !amountChanged) return;
-
-    if (modeChanged) {
-        console.log(`Mode: ${oldMode} -> ${newMode}`);
-    }
-    if (amountChanged) {
-        console.log(`Target Amount: ${oldAmount} -> ${newAmount}`);
-    }
 
     CURRENT_MODE = newMode;
     TARGET_BOT_COUNT = newAmount;
@@ -212,14 +228,9 @@ async function fetchInitialConfig() {
 
         const { mode, amount } = parseConfig(txt);
 
-        console.log(`Initial Mode: ${mode}`);
-        console.log(`Initial Target Amount: ${amount}`);
-
         CURRENT_MODE = mode;
         TARGET_BOT_COUNT = amount;
-    } catch (err) {
-        console.error("Initial config error:", err);
-    }
+    } catch {}
 }
 
 async function pollConfigFile() {
@@ -229,16 +240,14 @@ async function pollConfigFile() {
 
         const { mode, amount } = parseConfig(txt);
         applyConfig(mode, amount);
-    } catch (err) {
-        console.error("Config fetch error:", err);
-    }
+    } catch {}
 }
 
 async function init() {
     await fetchInitialConfig();
     ensureBotCount();
     setInterval(pollConfigFile, 3000);
-    setInterval(ensureBotCount, 100);
+    setInterval(ensureBotCount, 200);
 }
 
 init();
