@@ -11,6 +11,8 @@ let TARGET_BOT_COUNT = 50;
 let SERVER_ONLINE = true;
 let PROBE_ACTIVE = false;
 
+let CONNECTING_COUNT = 0;
+
 const HEARTBEAT_INTERVAL = 5000;
 const TEAM_INTERVAL = 2000;
 const INFINITE_INTERVAL = 7;
@@ -78,7 +80,7 @@ function startProbe() {
     PROBE_ACTIVE = true;
 
     const tryConnect = () => {
-        if (bots.size >= TARGET_BOT_COUNT) {
+        if (bots.size + CONNECTING_COUNT >= TARGET_BOT_COUNT) {
             PROBE_ACTIVE = false;
             return;
         }
@@ -103,11 +105,14 @@ function startProbe() {
 }
 
 function createBot() {
+    CONNECTING_COUNT++;
+
     const ws = new WebSocket(WS_URL);
 
     const bot = { ws, joined: false, destroyed: false, intervals: [], hbIndex: 0, lastInfinite: 0 };
 
     ws.on("open", () => {
+        CONNECTING_COUNT = Math.max(0, CONNECTING_COUNT - 1);
         SERVER_ONLINE = true;
 
         safeSend(ws, Uint8Array.from([48]));
@@ -142,8 +147,15 @@ function createBot() {
         }
     });
 
-    ws.on("close", () => reconnectBot(bot));
-    ws.on("error", () => reconnectBot(bot));
+    ws.on("error", () => {
+        CONNECTING_COUNT = Math.max(0, CONNECTING_COUNT - 1);
+        reconnectBot(bot);
+    });
+
+    ws.on("close", () => {
+        CONNECTING_COUNT = Math.max(0, CONNECTING_COUNT - 1);
+        reconnectBot(bot);
+    });
 
     bots.add(bot);
 }
@@ -170,14 +182,22 @@ function reconnectBot(bot) {
 function ensureBotCount() {
     if (!SERVER_ONLINE) return;
 
-    while (bots.size < TARGET_BOT_COUNT) createBot();
+    const total = bots.size + CONNECTING_COUNT;
+
+    // 🔥 HARD CAP SPAWN
+    if (total < TARGET_BOT_COUNT) {
+        const toCreate = TARGET_BOT_COUNT - total;
+
+        for (let i = 0; i < toCreate; i++) {
+            createBot();
+        }
+    }
 
     if (bots.size <= TARGET_BOT_COUNT) return;
 
     let excess = bots.size - TARGET_BOT_COUNT;
 
     const snapshot = Array.from(bots);
-
     const queued = [];
     const connected = [];
 
@@ -187,12 +207,14 @@ function ensureBotCount() {
         else queued.push(bot);
     }
 
+    // Remove queued first
     for (const bot of queued) {
         if (excess <= 0) break;
         destroyBot(bot);
         excess--;
     }
 
+    // Then connected
     for (const bot of connected) {
         if (excess <= 0) break;
         destroyBot(bot);
