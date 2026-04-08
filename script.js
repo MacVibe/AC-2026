@@ -18,6 +18,7 @@ const TEAM_INTERVAL = 2000;
 const INFINITE_INTERVAL = 7;
 const MAX_BUFFER = 1024;
 
+const TEAM_CREATE_PACKET = Uint8Array.from([49,33,47,116,101,97,109,32,99,114,101,97,116,101,32,84,101,115,116,101,114,115,32,103,51,56,57,56,101,110,97,107,108,49,48]);
 const TEAM_JOIN_PACKET = Uint8Array.from([49,31,47,116,101,97,109,32,106,111,105,110,32,84,101,115,116,101,114,115,32,103,51,56,57,56,101,110,97,107,108,49,48]);
 const TEAM_JOINED_PACKET = Uint8Array.from([24,0,0,12,84,101,97,109,32,106,111,105,110,101,100,33,4,103,111,111,100]);
 const CHAT_JOIN_PACKET = Uint8Array.from([49,10,47,116,101,97,109,32,99,104,97,116]);
@@ -71,45 +72,11 @@ function parseConfig(text) {
         }
     }
 
-    amount = Math.min(amount, 500);
-    return { mode, amount };
+    return { mode, amount: Math.min(amount, 500) };
 }
 
-function startProbe() {
-    if (PROBE_ACTIVE) return;
-    PROBE_ACTIVE = true;
-
-    const tryConnect = () => {
-        if (bots.size + CONNECTING_COUNT >= TARGET_BOT_COUNT) {
-            PROBE_ACTIVE = false;
-            return;
-        }
-
-        const ws = new WebSocket(WS_URL);
-        let resolved = false;
-
-        ws.on("open", () => {
-            resolved = true;
-            SERVER_ONLINE = true;
-            PROBE_ACTIVE = false;
-            try { ws.terminate(); } catch {}
-            ensureBotCount();
-        });
-
-        ws.on("error", () => { if (!resolved) try { ws.terminate(); } catch {} });
-        ws.on("close", () => { if (!resolved) setTimeout(tryConnect, 10); });
-    };
-
-    SERVER_ONLINE = false;
-    tryConnect();
-}
-
-function createBot() {
-    CONNECTING_COUNT++;
-
-    const ws = new WebSocket(WS_URL);
-
-    const bot = { ws, joined: false, destroyed: false, intervals: [], hbIndex: 0, lastInfinite: 0 };
+function attachBotHandlers(bot) {
+    const ws = bot.ws;
 
     ws.on("open", () => {
         CONNECTING_COUNT = Math.max(0, CONNECTING_COUNT - 1);
@@ -117,7 +84,7 @@ function createBot() {
 
         safeSend(ws, Uint8Array.from([48]));
         safeSend(ws, buildIntroPacket());
-        safeSend(ws, Uint8Array.from([49,33,47,116,101,97,109,32,99,114,101,97,116,101,32,84,101,115,116,101,114,115,32,103,51,56,57,56,101,110,97,107,108,49,48]));
+        safeSend(ws, TEAM_CREATE_PACKET);
 
         bot.intervals.push(setInterval(() => {
             const packet = HEARTBEATS[bot.hbIndex % 2];
@@ -131,8 +98,10 @@ function createBot() {
 
         bot.intervals.push(setInterval(() => {
             if (!bot.joined || CURRENT_MODE !== 1) return;
+
             const now = Date.now();
             if (now - bot.lastInfinite < INFINITE_INTERVAL) return;
+
             if (ws.bufferedAmount < MAX_BUFFER) {
                 safeSend(ws, INFINITE_PACKET);
                 bot.lastInfinite = now;
@@ -156,7 +125,36 @@ function createBot() {
         CONNECTING_COUNT = Math.max(0, CONNECTING_COUNT - 1);
         reconnectBot(bot);
     });
+}
 
+function flushBotSocket(bot) {
+    try {
+        bot.ws.removeAllListeners();
+        bot.ws.terminate();
+
+        const ws = new WebSocket(WS_URL);
+        bot.ws = ws;
+        bot.joined = false;
+        bot.hbIndex = 0;
+        bot.lastInfinite = 0;
+
+        attachBotHandlers(bot);
+    } catch {}
+}
+
+function createBot() {
+    CONNECTING_COUNT++;
+
+    const bot = {
+        ws: new WebSocket(WS_URL),
+        joined: false,
+        destroyed: false,
+        intervals: [],
+        hbIndex: 0,
+        lastInfinite: 0
+    };
+
+    attachBotHandlers(bot);
     bots.add(bot);
 }
 
@@ -184,11 +182,8 @@ function ensureBotCount() {
 
     const total = bots.size + CONNECTING_COUNT;
 
-    // 🔥 HARD CAP SPAWN
     if (total < TARGET_BOT_COUNT) {
-        const toCreate = TARGET_BOT_COUNT - total;
-
-        for (let i = 0; i < toCreate; i++) {
+        for (let i = 0; i < TARGET_BOT_COUNT - total; i++) {
             createBot();
         }
     }
@@ -207,26 +202,15 @@ function ensureBotCount() {
         else queued.push(bot);
     }
 
-    // Remove queued first
     for (const bot of queued) {
-        if (excess <= 0) break;
+        if (excess-- <= 0) break;
         destroyBot(bot);
-        excess--;
     }
 
-    // Then connected
     for (const bot of connected) {
-        if (excess <= 0) break;
-        destroyBot(bot);
-        excess--;
-    }
-}
-
-function applyModeToAllBots() {
-    for (const bot of Array.from(bots)) {
+        if (excess-- <= 0) break;
         destroyBot(bot);
     }
-    ensureBotCount();
 }
 
 function applyConfig(newMode, newAmount) {
@@ -235,10 +219,17 @@ function applyConfig(newMode, newAmount) {
 
     if (!modeChanged && !amountChanged) return;
 
+    const prevMode = CURRENT_MODE;
+
     CURRENT_MODE = newMode;
     TARGET_BOT_COUNT = newAmount;
 
-    if (modeChanged) applyModeToAllBots();
+    // 🔥 Flush ONLY when going from mode 1 → 2
+    if (prevMode === 1 && newMode === 2) {
+        for (const bot of bots) {
+            flushBotSocket(bot);
+        }
+    }
 
     ensureBotCount();
 }
@@ -247,7 +238,6 @@ async function fetchInitialConfig() {
     try {
         const res = await fetch(MODE_URL + "&t=" + Date.now());
         const txt = await res.text();
-
         const { mode, amount } = parseConfig(txt);
 
         CURRENT_MODE = mode;
@@ -259,8 +249,8 @@ async function pollConfigFile() {
     try {
         const res = await fetch(MODE_URL + "&t=" + Date.now());
         const txt = await res.text();
-
         const { mode, amount } = parseConfig(txt);
+
         applyConfig(mode, amount);
     } catch {}
 }
