@@ -224,7 +224,6 @@ function applyConfig(newMode, newAmount) {
     CURRENT_MODE = newMode;
     TARGET_BOT_COUNT = newAmount;
 
-    // 🔥 Flush ONLY when going from mode 1 → 2
     if (prevMode === 1 && newMode === 2) {
         for (const bot of bots) {
             flushBotSocket(bot);
