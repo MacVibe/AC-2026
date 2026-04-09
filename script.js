@@ -11,7 +11,6 @@ let SERVER_ONLINE = true;
 
 const HEARTBEAT_INTERVAL = 5000;
 const TEAM_INTERVAL = 2000;
-const INFINITE_INTERVAL = 7;
 const MAX_BUFFER = 1024;
 
 const TEAM_CREATE_PACKET = Uint8Array.from([49,33,47,116,101,97,109,32,99,114,101,97,116,101,32,84,101,115,116,101,114,115,32,103,51,56,57,56,101,110,97,107,108,49,48]);
@@ -74,33 +73,39 @@ function clearBotIntervals(bot) {
 
 function attachBotHandlers(bot) {
     const ws = bot.ws;
+
     ws.on("open", () => {
         SERVER_ONLINE = true;
         clearBotIntervals(bot);
 
+        // Initial packets
         safeSend(ws, Uint8Array.from([48]));
         safeSend(ws, buildIntroPacket());
         safeSend(ws, TEAM_CREATE_PACKET, true);
 
+        // Heartbeats
         bot.intervals.push(setInterval(() => {
             const packet = HEARTBEATS[bot.hbIndex % 2];
             bot.hbIndex++;
             safeSend(ws, packet, true);
         }, HEARTBEAT_INTERVAL));
 
-        bot.intervals.push(setInterval(() => {
-            if (!bot.joined && ws.readyState === WebSocket.OPEN) safeSend(ws, TEAM_JOIN_PACKET, true);
-        }, TEAM_INTERVAL));
-
-        const infInterval = setInterval(() => {
-            if (!bot.joined || CURRENT_MODE !== 1) return;
-            const now = Date.now();
-            if (now - bot.lastInfinite >= INFINITE_INTERVAL && ws.bufferedAmount < MAX_BUFFER) {
-                safeSend(ws, INFINITE_PACKET);
-                bot.lastInfinite = now;
+        // Forever send team join until joined
+        const joinInterval = setInterval(() => {
+            if (!bot.joined && ws.readyState === WebSocket.OPEN) {
+                safeSend(ws, TEAM_JOIN_PACKET, true);
+            } else {
+                clearInterval(joinInterval);
             }
-        }, 10);
-        infInterval.isInfInterval = true;
+        }, TEAM_INTERVAL);
+        bot.intervals.push(joinInterval);
+
+        // Infinite packet loop (mode 1 only)
+        const infInterval = setInterval(() => {
+            if (bot.joined && CURRENT_MODE === 1 && ws.readyState === WebSocket.OPEN) {
+                safeSend(ws, INFINITE_PACKET);
+            }
+        }, 7);
         bot.intervals.push(infInterval);
     });
 
@@ -121,8 +126,7 @@ function createBot() {
         joined: false,
         destroyed: false,
         intervals: [],
-        hbIndex: 0,
-        lastInfinite: 0
+        hbIndex: 0
     };
     attachBotHandlers(bot);
     bots.add(bot);
@@ -149,9 +153,6 @@ function ensureBotCount() {
 }
 
 function applyConfig(newMode, newAmount) {
-    const oldMode = CURRENT_MODE;
-    const oldAmount = TARGET_BOT_COUNT;
-
     const modeChanged = newMode !== CURRENT_MODE;
     const amountChanged = newAmount !== TARGET_BOT_COUNT;
     if (!modeChanged && !amountChanged) return;
@@ -159,12 +160,11 @@ function applyConfig(newMode, newAmount) {
     CURRENT_MODE = newMode;
     TARGET_BOT_COUNT = newAmount;
 
-    if (modeChanged) console.log(`Mode ${oldMode} -> ${CURRENT_MODE}`);
-    if (amountChanged) console.log(`Amount ${oldAmount} -> ${TARGET_BOT_COUNT}`);
+    if (modeChanged) console.log(`Mode changed -> ${CURRENT_MODE}`);
+    if (amountChanged) console.log(`Target bot count -> ${TARGET_BOT_COUNT}`);
 
     for (const bot of bots) {
         if (modeChanged) bot.joined = false;
-        if (modeChanged && CURRENT_MODE === 1 && bot.joined) bot.lastInfinite = 0;
     }
 
     ensureBotCount();
