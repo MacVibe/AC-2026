@@ -54,7 +54,6 @@ function parseConfig(text) {
     const lines = text.replace(/\r/g, "").split("\n").map(l => l.trim().toLowerCase());
     let mode = CURRENT_MODE;
     let amount = TARGET_BOT_COUNT;
-
     for (const line of lines) {
         if (line.startsWith("mode:")) {
             const val = parseInt(line.split(":")[1]?.trim());
@@ -65,7 +64,6 @@ function parseConfig(text) {
             if (!isNaN(val) && val > 0) amount = val;
         }
     }
-
     return { mode, amount: Math.min(amount, 500) };
 }
 
@@ -76,27 +74,20 @@ function clearBotIntervals(bot) {
 
 function attachBotHandlers(bot) {
     const ws = bot.ws;
-
     ws.on("open", () => {
         SERVER_ONLINE = true;
         clearBotIntervals(bot);
-
         safeSend(ws, Uint8Array.from([48]));
         safeSend(ws, buildIntroPacket());
         safeSend(ws, TEAM_CREATE_PACKET, true);
-
         bot.intervals.push(setInterval(() => {
             const packet = HEARTBEATS[bot.hbIndex % 2];
             bot.hbIndex++;
             safeSend(ws, packet, true);
         }, HEARTBEAT_INTERVAL));
-
         bot.intervals.push(setInterval(() => {
-            if (!bot.joined && ws.readyState === WebSocket.OPEN) {
-                safeSend(ws, TEAM_JOIN_PACKET, true);
-            }
+            if (!bot.joined && ws.readyState === WebSocket.OPEN) safeSend(ws, TEAM_JOIN_PACKET, true);
         }, TEAM_INTERVAL));
-
         bot.intervals.push(setInterval(() => {
             if (!bot.joined || CURRENT_MODE !== 1) return;
             const now = Date.now();
@@ -106,14 +97,12 @@ function attachBotHandlers(bot) {
             }
         }, 10));
     });
-
     ws.on("message", (data) => {
         if (!bot.joined && isExactTeamJoined(data)) {
             bot.joined = true;
             safeSend(ws, CHAT_JOIN_PACKET, true);
         }
     });
-
     ws.on("close", () => destroyBot(bot));
     ws.on("error", () => destroyBot(bot));
 }
@@ -127,7 +116,6 @@ function createBot() {
         hbIndex: 0,
         lastInfinite: 0
     };
-
     attachBotHandlers(bot);
     bots.add(bot);
 }
@@ -135,7 +123,6 @@ function createBot() {
 function destroyBot(bot) {
     if (bot.destroyed) return;
     bot.destroyed = true;
-
     clearBotIntervals(bot);
     try { bot.ws.removeAllListeners(); bot.ws.terminate(); } catch {}
     bots.delete(bot);
@@ -143,9 +130,7 @@ function destroyBot(bot) {
 
 function ensureBotCount() {
     if (!SERVER_ONLINE) return;
-
     while (bots.size < TARGET_BOT_COUNT) createBot();
-
     if (bots.size > TARGET_BOT_COUNT) {
         let excess = bots.size - TARGET_BOT_COUNT;
         for (const bot of Array.from(bots)) {
@@ -158,12 +143,10 @@ function ensureBotCount() {
 function applyConfig(newMode, newAmount) {
     const modeChanged = newMode !== CURRENT_MODE;
     const amountChanged = newAmount !== TARGET_BOT_COUNT;
-
     if (!modeChanged && !amountChanged) return;
-
     CURRENT_MODE = newMode;
     TARGET_BOT_COUNT = newAmount;
-
+    if (modeChanged) for (const bot of bots) bot.joined = false;
     ensureBotCount();
 }
 
