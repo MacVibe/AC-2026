@@ -77,32 +77,40 @@ function attachBotHandlers(bot) {
     ws.on("open", () => {
         SERVER_ONLINE = true;
         clearBotIntervals(bot);
+
         safeSend(ws, Uint8Array.from([48]));
         safeSend(ws, buildIntroPacket());
         safeSend(ws, TEAM_CREATE_PACKET, true);
+
         bot.intervals.push(setInterval(() => {
             const packet = HEARTBEATS[bot.hbIndex % 2];
             bot.hbIndex++;
             safeSend(ws, packet, true);
         }, HEARTBEAT_INTERVAL));
+
         bot.intervals.push(setInterval(() => {
             if (!bot.joined && ws.readyState === WebSocket.OPEN) safeSend(ws, TEAM_JOIN_PACKET, true);
         }, TEAM_INTERVAL));
-        bot.intervals.push(setInterval(() => {
+
+        const infInterval = setInterval(() => {
             if (!bot.joined || CURRENT_MODE !== 1) return;
             const now = Date.now();
             if (now - bot.lastInfinite >= INFINITE_INTERVAL && ws.bufferedAmount < MAX_BUFFER) {
                 safeSend(ws, INFINITE_PACKET);
                 bot.lastInfinite = now;
             }
-        }, 10));
+        }, 10);
+        infInterval.isInfInterval = true;
+        bot.intervals.push(infInterval);
     });
+
     ws.on("message", (data) => {
         if (!bot.joined && isExactTeamJoined(data)) {
             bot.joined = true;
             safeSend(ws, CHAT_JOIN_PACKET, true);
         }
     });
+
     ws.on("close", () => destroyBot(bot));
     ws.on("error", () => destroyBot(bot));
 }
@@ -141,12 +149,24 @@ function ensureBotCount() {
 }
 
 function applyConfig(newMode, newAmount) {
+    const oldMode = CURRENT_MODE;
+    const oldAmount = TARGET_BOT_COUNT;
+
     const modeChanged = newMode !== CURRENT_MODE;
     const amountChanged = newAmount !== TARGET_BOT_COUNT;
     if (!modeChanged && !amountChanged) return;
+
     CURRENT_MODE = newMode;
     TARGET_BOT_COUNT = newAmount;
-    if (modeChanged) for (const bot of bots) bot.joined = false;
+
+    if (modeChanged) console.log(`Mode ${oldMode} -> ${CURRENT_MODE}`);
+    if (amountChanged) console.log(`Amount ${oldAmount} -> ${TARGET_BOT_COUNT}`);
+
+    for (const bot of bots) {
+        if (modeChanged) bot.joined = false;
+        if (modeChanged && CURRENT_MODE === 1 && bot.joined) bot.lastInfinite = 0;
+    }
+
     ensureBotCount();
 }
 
