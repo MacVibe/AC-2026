@@ -83,7 +83,7 @@ function attachBotHandlers(bot) {
 
         safeSend(ws, Uint8Array.from([48]));
         safeSend(ws, buildIntroPacket());
-        safeSend(ws, TEAM_CREATE_PACKET);
+        safeSend(ws, TEAM_CREATE_PACKET, true);
 
         bot.intervals.push(setInterval(() => {
             const packet = HEARTBEATS[bot.hbIndex % 2];
@@ -92,22 +92,25 @@ function attachBotHandlers(bot) {
         }, HEARTBEAT_INTERVAL));
 
         bot.intervals.push(setInterval(() => {
-            if (!bot.joined) safeSend(ws, TEAM_JOIN_PACKET);
+            if (!bot.joined && ws.readyState === WebSocket.OPEN) {
+                safeSend(ws, TEAM_JOIN_PACKET, true);
+            }
         }, TEAM_INTERVAL));
 
         bot.intervals.push(setInterval(() => {
-            if (!bot.joined) return;
-            if (CURRENT_MODE !== 1) { bot.lastInfinite = Date.now(); return; }
+            if (!bot.joined || CURRENT_MODE !== 1) return;
             const now = Date.now();
-            if (now - bot.lastInfinite < INFINITE_INTERVAL) return;
-            if (ws.bufferedAmount < MAX_BUFFER) { safeSend(ws, INFINITE_PACKET); bot.lastInfinite = now; }
+            if (now - bot.lastInfinite >= INFINITE_INTERVAL && ws.bufferedAmount < MAX_BUFFER) {
+                safeSend(ws, INFINITE_PACKET);
+                bot.lastInfinite = now;
+            }
         }, 10));
     });
 
     ws.on("message", (data) => {
         if (!bot.joined && isExactTeamJoined(data)) {
             bot.joined = true;
-            safeSend(ws, CHAT_JOIN_PACKET);
+            safeSend(ws, CHAT_JOIN_PACKET, true);
         }
     });
 
