@@ -45,32 +45,10 @@ function safeSend(ws, data, force = false) {
 
 const encoder = new TextEncoder();
 
-function buildPacket(...parts) {
-    const chunks = [];
-
-    for (let part of parts) {
-        if (typeof part === "number") {
-            chunks.push(Uint8Array.of(part));
-        } else if (typeof part === "string") {
-            chunks.push(encoder.encode(part));
-        } else {
-            throw new Error("Unsupported type: " + typeof part);
-        }
-    }
-
+function buildPacket(...bytes) {
     const randomNum = Math.floor(Math.random() * 10000);
-    chunks.push(encoder.encode(String(randomNum)));
-
-    const totalLength = chunks.reduce((sum, c) => sum + c.length, 0);
-    const packet = new Uint8Array(totalLength);
-
-    let offset = 0;
-    for (let chunk of chunks) {
-        packet.set(chunk, offset);
-        offset += chunk.length;
-    }
-
-    return packet;
+    const randomBytes = Array.from(String(randomNum)).map(c => c.charCodeAt(0));
+    return new Uint8Array([...bytes, ...randomBytes]);
 }
 
 function buildIntroPacket() {
@@ -78,11 +56,11 @@ function buildIntroPacket() {
         31,
         1,
         13,
-        240,159,148,145,
-        194,
-        173,
+        240, 159, 148, 145,
+        194, 173,
         13,
-        "🔑\t"
+        240, 159, 148, 145,
+        9
     );
 }
 
