@@ -43,19 +43,47 @@ function safeSend(ws, data, force = false) {
     return true;
 }
 
-function buildIntroPacket() {
-    const name = encoder.encode("🔑\t" + Math.floor(Math.random() * 10000));
-    const packet = new Uint8Array(6 + name.length);
+const encoder = new TextEncoder();
 
-    packet[0] = 31;
-    packet[1] = 1;
-    packet[2] = 13;
-    packet[3] = 194;
-    packet[4] = 173;
-    packet[5] = 13;
+function buildPacket(...parts) {
+    const chunks = [];
 
-    packet.set(name, 6);
+    for (let part of parts) {
+        if (typeof part === "number") {
+            chunks.push(Uint8Array.of(part));
+        } else if (typeof part === "string") {
+            chunks.push(encoder.encode(part));
+        } else {
+            throw new Error("Unsupported type: " + typeof part);
+        }
+    }
+
+    const randomNum = Math.floor(Math.random() * 10000);
+    chunks.push(encoder.encode(String(randomNum)));
+
+    const totalLength = chunks.reduce((sum, c) => sum + c.length, 0);
+    const packet = new Uint8Array(totalLength);
+
+    let offset = 0;
+    for (let chunk of chunks) {
+        packet.set(chunk, offset);
+        offset += chunk.length;
+    }
+
     return packet;
+}
+
+function buildIntroPacket() {
+    return buildPacket(
+        31,
+        1,
+        13,
+        "🔑",
+        194,
+        173,
+        13,
+        "🔑\t"
+    );
 }
 
 function isExactTeamJoined(data) {
