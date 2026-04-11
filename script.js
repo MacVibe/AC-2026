@@ -53,8 +53,8 @@ function buildIntroPacket() {
     return buildPacket(
         31,
         1,
-        14,
-        194, 164, 66, 111, 116,
+        13,
+        194, 240, 159, 148, 146
         13,
         240, 159, 148, 145
     );
