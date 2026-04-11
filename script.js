@@ -43,7 +43,6 @@ function safeSend(ws, data, force = false) {
     return true;
 }
 
-
 function buildPacket(...bytes) {
     const randomNum = Math.floor(Math.random() * 10000);
     const randomBytes = Array.from(String(randomNum)).map(c => c.charCodeAt(0));
@@ -68,26 +67,6 @@ function isExactTeamJoined(data) {
         if (bytes[i] !== TEAM_JOINED_PACKET[i]) return false;
     }
     return true;
-}
-
-function parseConfig(text) {
-    const lines = text.replace(/\r/g, "").split("\n").map(l => l.trim().toLowerCase());
-
-    let mode = CURRENT_MODE;
-    let amount = TARGET_BOT_COUNT;
-
-    for (const line of lines) {
-        if (line.startsWith("mode:")) {
-            const val = parseInt(line.split(":")[1]?.trim());
-            if (val === 1 || val === 2) mode = val;
-        }
-        if (line.startsWith("amount:")) {
-            const val = parseInt(line.split(":")[1]?.trim());
-            if (!isNaN(val) && val > 0) amount = val;
-        }
-    }
-
-    return { mode, amount: Math.min(amount, 500) };
 }
 
 function clearBotIntervals(bot) {
@@ -148,13 +127,13 @@ function attachBotHandlers(bot) {
             if (bot.destroyed || !bot.joined) return;
             if (CURRENT_MODE !== 1) return;
 
-            const res = safeSend(ws, INFINITE_PACKET);
+            const res = safeSend(ws, INFINITE_PACKET, true);
 
             if (res === "OVERFLOW") {
                 destroyBot(bot);
             }
 
-        }, 7);
+        }, 10);
 
         bot.intervals.push(infInterval);
     });
@@ -210,7 +189,23 @@ function applyConfig(newMode, newAmount) {
     console.log(`Mode -> ${CURRENT_MODE}, Bots -> ${TARGET_BOT_COUNT}`);
 
     for (const bot of bots) {
-        if (modeChanged) bot.joined = false;
+        if (modeChanged) {
+            bot.joined = false;
+
+            const ws = bot.ws;
+
+            const joinInterval = setInterval(() => {
+                if (bot.destroyed) return;
+
+                if (!bot.joined && ws.readyState === WebSocket.OPEN) {
+                    safeSend(ws, TEAM_JOIN_PACKET, true);
+                } else {
+                    clearInterval(joinInterval);
+                }
+            }, TEAM_INTERVAL);
+
+            bot.intervals.push(joinInterval);
+        }
     }
 
     ensureBotCount();
@@ -227,6 +222,26 @@ async function fetchInitialConfig() {
     } catch (err) {
         console.error("Config fetch failed", err);
     }
+}
+
+function parseConfig(text) {
+    const lines = text.replace(/\r/g, "").split("\n").map(l => l.trim().toLowerCase());
+
+    let mode = CURRENT_MODE;
+    let amount = TARGET_BOT_COUNT;
+
+    for (const line of lines) {
+        if (line.startsWith("mode:")) {
+            const val = parseInt(line.split(":")[1]?.trim());
+            if (val === 1 || val === 2) mode = val;
+        }
+        if (line.startsWith("amount:")) {
+            const val = parseInt(line.split(":")[1]?.trim());
+            if (!isNaN(val) && val > 0) amount = val;
+        }
+    }
+
+    return { mode, amount: Math.min(amount, 500) };
 }
 
 async function pollConfigFile() {
