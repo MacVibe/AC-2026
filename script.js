@@ -43,7 +43,6 @@ function safeSend(ws, data, force = false) {
     return true;
 }
 
-const encoder = new TextEncoder();
 
 function buildPacket(...bytes) {
     const randomNum = Math.floor(Math.random() * 10000);
