@@ -188,40 +188,8 @@ function applyConfig(newMode, newAmount) {
 
     console.log(`Mode -> ${CURRENT_MODE}, Bots -> ${TARGET_BOT_COUNT}`);
 
-    for (const bot of bots) {
-        if (modeChanged) {
-            bot.joined = false;
-
-            const ws = bot.ws;
-
-            const joinInterval = setInterval(() => {
-                if (bot.destroyed) return;
-
-                if (!bot.joined && ws.readyState === WebSocket.OPEN) {
-                    safeSend(ws, TEAM_JOIN_PACKET, true);
-                } else {
-                    clearInterval(joinInterval);
-                }
-            }, TEAM_INTERVAL);
-
-            bot.intervals.push(joinInterval);
-        }
-    }
 
     ensureBotCount();
-}
-
-async function fetchInitialConfig() {
-    try {
-        const res = await fetch(MODE_URL + "&t=" + Date.now());
-        const txt = await res.text();
-        const { mode, amount } = parseConfig(txt);
-
-        CURRENT_MODE = mode;
-        TARGET_BOT_COUNT = amount;
-    } catch (err) {
-        console.error("Config fetch failed", err);
-    }
 }
 
 function parseConfig(text) {
@@ -242,6 +210,19 @@ function parseConfig(text) {
     }
 
     return { mode, amount: Math.min(amount, 500) };
+}
+
+async function fetchInitialConfig() {
+    try {
+        const res = await fetch(MODE_URL + "&t=" + Date.now());
+        const txt = await res.text();
+        const { mode, amount } = parseConfig(txt);
+
+        CURRENT_MODE = mode;
+        TARGET_BOT_COUNT = amount;
+    } catch (err) {
+        console.error("Config fetch failed", err);
+    }
 }
 
 async function pollConfigFile() {
