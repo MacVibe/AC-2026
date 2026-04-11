@@ -44,14 +44,16 @@ function safeSend(ws, data, force = false) {
 }
 
 function buildIntroPacket() {
-    const name = encoder.encode("🔑	" + Math.floor(Math.random() * 10000));
-    const packet = new Uint8Array(3 + name.length);
+    const name = encoder.encode("🔑\t" + Math.floor(Math.random() * 10000));
+    const packet = new Uint8Array(6 + name.length);
+
     packet[0] = 31;
     packet[1] = 1;
     packet[2] = 13;
     packet[3] = 194;
     packet[4] = 173;
     packet[5] = 13;
+
     packet.set(name, 6);
     return packet;
 }
