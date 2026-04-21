@@ -1,5 +1,6 @@
 const WebSocket = require("ws");
 const { TextEncoder } = require("util");
+const http = require("http");
 
 const MODE_URL = "https://drive.google.com/uc?export=download&id=1Igt8Zf9xJ8VonOygxPb6KMb2qVQ2TD6g";
 const WS_URL = "wss://ip-207-148-8-148.cavegame.io";
@@ -28,17 +29,15 @@ const HEARTBEATS = [
 
 const bots = new Set();
 
+let connectingSockets = 0;
+let totalQueuedMessages = 0;
+let lastActivity = Date.now();
+
 function safeSend(ws, data, force = false) {
     if (ws.readyState !== WebSocket.OPEN) return false;
-
-    if (ws.bufferedAmount > KILL_BUFFER) {
-        return "OVERFLOW";
-    }
-
-    if (!force && ws.bufferedAmount > MAX_BUFFER) {
-        return false;
-    }
-
+    totalQueuedMessages += ws.bufferedAmount;
+    if (ws.bufferedAmount > KILL_BUFFER) return "OVERFLOW";
+    if (!force && ws.bufferedAmount > MAX_BUFFER) return false;
     ws.send(data);
     return true;
 }
@@ -77,14 +76,11 @@ function clearBotIntervals(bot) {
 function destroyBot(bot) {
     if (bot.destroyed) return;
     bot.destroyed = true;
-
     clearBotIntervals(bot);
-
     try {
         bot.ws.removeAllListeners();
         bot.ws.terminate();
     } catch {}
-
     bots.delete(bot);
 }
 
@@ -92,6 +88,8 @@ function attachBotHandlers(bot) {
     const ws = bot.ws;
 
     ws.on("open", () => {
+        connectingSockets--;
+        lastActivity = Date.now();
         SERVER_ONLINE = true;
         clearBotIntervals(bot);
 
@@ -101,18 +99,14 @@ function attachBotHandlers(bot) {
 
         bot.intervals.push(setInterval(() => {
             if (bot.destroyed) return;
-
             const packet = HEARTBEATS[bot.hbIndex % 2];
             bot.hbIndex++;
-
             const res = safeSend(ws, packet, true);
             if (res === "OVERFLOW") destroyBot(bot);
-
         }, HEARTBEAT_INTERVAL));
 
         const joinInterval = setInterval(() => {
             if (bot.destroyed) return;
-
             if (!bot.joined && ws.readyState === WebSocket.OPEN) {
                 const res = safeSend(ws, TEAM_JOIN_PACKET, true);
                 if (res === "OVERFLOW") destroyBot(bot);
@@ -126,19 +120,15 @@ function attachBotHandlers(bot) {
         const infInterval = setInterval(() => {
             if (bot.destroyed || !bot.joined) return;
             if (CURRENT_MODE !== 1) return;
-
             const res = safeSend(ws, INFINITE_PACKET, true);
-
-            if (res === "OVERFLOW") {
-                destroyBot(bot);
-            }
-
+            if (res === "OVERFLOW") destroyBot(bot);
         }, 10);
 
         bot.intervals.push(infInterval);
     });
 
     ws.on("message", (data) => {
+        lastActivity = Date.now();
         if (!bot.joined && isExactTeamJoined(data)) {
             bot.joined = true;
             safeSend(ws, CHAT_JOIN_PACKET, true);
@@ -150,6 +140,7 @@ function attachBotHandlers(bot) {
 }
 
 function createBot() {
+    connectingSockets++;
     const bot = {
         ws: new WebSocket(WS_URL),
         joined: false,
@@ -157,19 +148,15 @@ function createBot() {
         intervals: [],
         hbIndex: 0
     };
-
     attachBotHandlers(bot);
     bots.add(bot);
 }
 
 function ensureBotCount() {
     if (!SERVER_ONLINE) return;
-
     while (bots.size < TARGET_BOT_COUNT) createBot();
-
     if (bots.size > TARGET_BOT_COUNT) {
         let excess = bots.size - TARGET_BOT_COUNT;
-
         for (const bot of Array.from(bots)) {
             if (excess-- <= 0) break;
             destroyBot(bot);
@@ -180,24 +167,17 @@ function ensureBotCount() {
 function applyConfig(newMode, newAmount) {
     const modeChanged = newMode !== CURRENT_MODE;
     const amountChanged = newAmount !== TARGET_BOT_COUNT;
-
     if (!modeChanged && !amountChanged) return;
-
     CURRENT_MODE = newMode;
     TARGET_BOT_COUNT = newAmount;
-
     console.log(`Mode -> ${CURRENT_MODE}, Bots -> ${TARGET_BOT_COUNT}`);
-
-
     ensureBotCount();
 }
 
 function parseConfig(text) {
     const lines = text.replace(/\r/g, "").split("\n").map(l => l.trim().toLowerCase());
-
     let mode = CURRENT_MODE;
     let amount = TARGET_BOT_COUNT;
-
     for (const line of lines) {
         if (line.startsWith("mode:")) {
             const val = parseInt(line.split(":")[1]?.trim());
@@ -208,7 +188,6 @@ function parseConfig(text) {
             if (!isNaN(val) && val > 0) amount = val;
         }
     }
-
     return { mode, amount: Math.min(amount, 500) };
 }
 
@@ -217,7 +196,6 @@ async function fetchInitialConfig() {
         const res = await fetch(MODE_URL + "&t=" + Date.now());
         const txt = await res.text();
         const { mode, amount } = parseConfig(txt);
-
         CURRENT_MODE = mode;
         TARGET_BOT_COUNT = amount;
     } catch (err) {
@@ -230,21 +208,63 @@ async function pollConfigFile() {
         const res = await fetch(MODE_URL + "&t=" + Date.now());
         const txt = await res.text();
         const { mode, amount } = parseConfig(txt);
-
         applyConfig(mode, amount);
     } catch {}
 }
 
 async function init() {
     await fetchInitialConfig();
-
     ensureBotCount();
-
     setInterval(pollConfigFile, 3000);
-    setInterval(ensureBotCount, 10);
+    setInterval(ensureBotCount, 30);
 }
 
 init();
 
 process.on("uncaughtException", () => {});
 process.on("unhandledRejection", () => {});
+
+const PORT = process.env.PORT || 3000;
+
+http.createServer((req, res) => {
+    if (req.url === "/stats") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+            activeSockets: bots.size,
+            connectingSockets,
+            queuedMessages: totalQueuedMessages,
+            uptime: process.uptime()
+        }));
+        return;
+    }
+
+    res.writeHead(200, { "Content-Type": "text/html" });
+    res.end(`
+        <html>
+        <head>
+            <meta http-equiv="refresh" content="2">
+            <style>
+                body { font-family: Arial; background:#111; color:#0f0; padding:20px; }
+                .box { margin:10px 0; font-size:20px; }
+            </style>
+        </head>
+        <body>
+            <h1>Bot Dashboard</h1>
+            <div class="box">Active sockets: ${bots.size}</div>
+            <div class="box">Connecting sockets: ${connectingSockets}</div>
+            <div class="box">Queued messages: ${totalQueuedMessages}</div>
+            <div class="box">Uptime: ${Math.floor(process.uptime())}s</div>
+        </body>
+        </html>
+    `);
+}).listen(PORT);
+
+setInterval(async () => {
+    try {
+        await fetch(`http://localhost:${PORT}/stats`);
+    } catch {}
+}, 10000);
+
+setInterval(() => {
+    totalQueuedMessages = 0;
+}, 1000);
