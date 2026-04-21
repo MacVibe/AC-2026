@@ -2,8 +2,10 @@ const WebSocket = require("ws");
 const { TextEncoder } = require("util");
 const http = require("http");
 
-const fetch = global.fetch || (...args) =>
-  import("node-fetch").then(({ default: f }) => f(...args));
+const fetch =
+  globalThis.fetch ||
+  ((...args) =>
+    import("node-fetch").then(({ default: f }) => f(...args)));
 
 const MODE_URL =
   "https://drive.google.com/uc?export=download&id=1Igt8Zf9xJ8VonOygxPb6KMb2qVQ2TD6g";
@@ -57,12 +59,9 @@ const INACTIVITY_THRESHOLD = 15000;
 function safeSend(ws, data, force = false) {
   try {
     if (!ws || ws.readyState !== WebSocket.OPEN) return false;
-
     totalQueuedMessages += ws.bufferedAmount || 0;
-
     if (ws.bufferedAmount > KILL_BUFFER) return "OVERFLOW";
     if (!force && ws.bufferedAmount > MAX_BUFFER) return false;
-
     ws.send(data);
     return true;
   } catch {
@@ -75,7 +74,7 @@ function buildPacket(...bytes) {
   const randomBytes = Array.from(String(randomNum)).map((c) =>
     c.charCodeAt(0)
   );
-  return new Uint8Array([...bytes, ...randomBytes]);
+  return Uint8Array.from([...bytes, ...randomBytes]);
 }
 
 function buildIntroPacket() {
@@ -85,7 +84,6 @@ function buildIntroPacket() {
 function isExactTeamJoined(data) {
   const bytes = new Uint8Array(data);
   if (bytes.length !== TEAM_JOINED_PACKET.length) return false;
-
   for (let i = 0; i < bytes.length; i++) {
     if (bytes[i] !== TEAM_JOINED_PACKET[i]) return false;
   }
@@ -100,19 +98,15 @@ function clearBotIntervals(bot) {
 function destroyBot(bot) {
   if (!bot || bot.destroyed) return;
   bot.destroyed = true;
-
   if (bot.connecting) {
     bot.connecting = false;
     connectingSockets = Math.max(0, connectingSockets - 1);
   }
-
   clearBotIntervals(bot);
-
   try {
     bot.ws?.removeAllListeners();
     bot.ws?.terminate();
   } catch {}
-
   bots.delete(bot);
 }
 
@@ -139,10 +133,8 @@ function attachBotHandlers(bot) {
     bot.intervals.push(
       setInterval(() => {
         if (bot.destroyed) return;
-
         const packet = HEARTBEATS[bot.hbIndex % 2];
         bot.hbIndex++;
-
         const res = safeSend(ws, packet, true);
         if (res === "OVERFLOW") destroyBot(bot);
       }, HEARTBEAT_INTERVAL)
@@ -150,7 +142,6 @@ function attachBotHandlers(bot) {
 
     const joinInterval = setInterval(() => {
       if (bot.destroyed) return;
-
       if (!bot.joined && ws.readyState === WebSocket.OPEN) {
         const res = safeSend(ws, TEAM_JOIN_PACKET, true);
         if (res === "OVERFLOW") destroyBot(bot);
@@ -165,7 +156,6 @@ function attachBotHandlers(bot) {
       setInterval(() => {
         if (bot.destroyed || !bot.joined) return;
         if (CURRENT_MODE !== 1) return;
-
         const res = safeSend(ws, INFINITE_PACKET, true);
         if (res === "OVERFLOW") destroyBot(bot);
       }, 10)
@@ -174,7 +164,6 @@ function attachBotHandlers(bot) {
 
   ws.on("message", (data) => {
     lastActivity = Date.now();
-
     if (!bot.joined && isExactTeamJoined(data)) {
       bot.joined = true;
       safeSend(ws, CHAT_JOIN_PACKET, true);
@@ -187,7 +176,6 @@ function attachBotHandlers(bot) {
 
 function createBot() {
   connectingSockets++;
-
   const bot = {
     ws: new WebSocket(WS_URL),
     joined: false,
@@ -196,7 +184,6 @@ function createBot() {
     hbIndex: 0,
     connecting: true,
   };
-
   attachBotHandlers(bot);
   bots.add(bot);
 }
@@ -207,9 +194,7 @@ function ensureBotCount() {
   const connected = bots.size - connectingSockets;
 
   if (connected >= TARGET_BOT_COUNT) {
-    for (const bot of [...bots]) {
-      if (bot.connecting) destroyBot(bot);
-    }
+    for (const bot of [...bots]) if (bot.connecting) destroyBot(bot);
     return;
   }
 
@@ -240,55 +225,55 @@ function ensureBotCount() {
 }
 
 function applyConfig(newMode, newAmount) {
-    if (newMode === CURRENT_MODE && newAmount === TARGET_BOT_COUNT) return;
-    CURRENT_MODE = newMode;
-    TARGET_BOT_COUNT = newAmount;
-    ensureBotCount();
+  if (newMode === CURRENT_MODE && newAmount === TARGET_BOT_COUNT) return;
+  CURRENT_MODE = newMode;
+  TARGET_BOT_COUNT = newAmount;
+  ensureBotCount();
 }
 
 function parseConfig(text) {
-    const lines = text.replace(/\r/g, "").split("\n").map(l => l.trim().toLowerCase());
-    let mode = CURRENT_MODE;
-    let amount = TARGET_BOT_COUNT;
+  const lines = text.replace(/\r/g, "").split("\n").map(l => l.trim().toLowerCase());
+  let mode = CURRENT_MODE;
+  let amount = TARGET_BOT_COUNT;
 
-    for (const line of lines) {
-        if (line.startsWith("mode:")) {
-            const val = parseInt(line.split(":")[1]?.trim());
-            if (val === 1 || val === 2) mode = val;
-        }
-        if (line.startsWith("amount:")) {
-            const val = parseInt(line.split(":")[1]?.trim());
-            if (!isNaN(val) && val > 0) amount = val;
-        }
+  for (const line of lines) {
+    if (line.startsWith("mode:")) {
+      const val = parseInt(line.split(":")[1]?.trim());
+      if (val === 1 || val === 2) mode = val;
     }
+    if (line.startsWith("amount:")) {
+      const val = parseInt(line.split(":")[1]?.trim());
+      if (!isNaN(val) && val > 0) amount = val;
+    }
+  }
 
-    return { mode, amount: Math.min(amount, 500) };
+  return { mode, amount: Math.min(amount, 500) };
 }
 
 async function fetchInitialConfig() {
-    try {
-        const res = await fetch(MODE_URL + "&t=" + Date.now());
-        const txt = await res.text();
-        const { mode, amount } = parseConfig(txt);
-        CURRENT_MODE = mode;
-        TARGET_BOT_COUNT = amount;
-    } catch {}
+  try {
+    const res = await fetch(MODE_URL + "&t=" + Date.now());
+    const txt = await res.text();
+    const { mode, amount } = parseConfig(txt);
+    CURRENT_MODE = mode;
+    TARGET_BOT_COUNT = amount;
+  } catch {}
 }
 
 async function pollConfigFile() {
-    try {
-        const res = await fetch(MODE_URL + "&t=" + Date.now());
-        const txt = await res.text();
-        const { mode, amount } = parseConfig(txt);
-        applyConfig(mode, amount);
-    } catch {}
+  try {
+    const res = await fetch(MODE_URL + "&t=" + Date.now());
+    const txt = await res.text();
+    const { mode, amount } = parseConfig(txt);
+    applyConfig(mode, amount);
+  } catch {}
 }
 
 async function init() {
-    await fetchInitialConfig();
-    ensureBotCount();
-    setInterval(pollConfigFile, 3000);
-    setInterval(ensureBotCount, 30);
+  await fetchInitialConfig();
+  ensureBotCount();
+  setInterval(pollConfigFile, 3000);
+  setInterval(ensureBotCount, 30);
 }
 
 init();
@@ -297,155 +282,73 @@ process.on("uncaughtException", () => {});
 process.on("unhandledRejection", () => {});
 
 setInterval(() => {
-    const now = Date.now();
-    const inactive = now - lastActivity > INACTIVITY_THRESHOLD;
-    if (inactive) {
-        if (!inactivityStart) inactivityStart = now;
-    } else {
-        inactivityStart = null;
-    }
+  const now = Date.now();
+  const inactive = now - lastActivity > INACTIVITY_THRESHOLD;
+  if (inactive) {
+    if (!inactivityStart) inactivityStart = now;
+  } else {
+    inactivityStart = null;
+  }
 }, 1000);
 
 const PORT = process.env.PORT || 3000;
 
 http.createServer((req, res) => {
-    if (req.url === "/stats") {
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({
-            connected: bots.size - connectingSockets,
-            connecting: connectingSockets,
-            total: bots.size,
-            queuedMessages: totalQueuedMessages,
-            uptime: process.uptime(),
-            inactiveFor: inactivityStart ? Date.now() - inactivityStart : 0
-        }));
-        return;
-    }
+  if (req.url === "/stats") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({
+      connected: bots.size - connectingSockets,
+      connecting: connectingSockets,
+      total: bots.size,
+      queuedMessages: totalQueuedMessages,
+      uptime: process.uptime(),
+      inactiveFor: inactivityStart ? Date.now() - inactivityStart : 0
+    }));
+    return;
+  }
 
-    res.writeHead(200, { "Content-Type": "text/html" });
-    res.end(`
+  res.writeHead(200, { "Content-Type": "text/html" });
+  res.end(`<!DOCTYPE html>
 <html>
 <head>
 <style>
-body {
-    margin: 0;
-    background: #111;
-    font-family: 'Segoe UI', Tahoma, sans-serif;
-}
-
-#panel {
-    position: fixed;
-    top: 20px;
-    left: 20px;
-    width: 240px;
-    background: linear-gradient(145deg, #1f1f1f, #282828);
-    border-radius: 12px;
-    box-shadow: 0 4px 20px rgba(0,0,0,0.6);
-    color: #f5f5f5;
-    overflow: hidden;
-    user-select: none;
-}
-
-#header {
-    background: linear-gradient(to right, #00c6ff, #0072ff);
-    padding: 8px;
-    font-weight: bold;
-    text-align: center;
-    font-size: 14px;
-    cursor: move;
-}
-
-#content {
-    padding: 10px;
-}
-
-.stat {
-    margin-bottom: 6px;
-    padding: 6px;
-    background: rgba(255,255,255,0.05);
-    border-radius: 6px;
-    font-size: 13px;
-}
+body{margin:0;background:#111;font-family:Segoe UI,Tahoma,sans-serif}
+#panel{position:fixed;top:20px;left:20px;width:240px;background:#222;border-radius:12px;color:#fff;overflow:hidden}
+#header{background:#0072ff;padding:8px;font-weight:bold;text-align:center;cursor:move}
+#content{padding:10px}
+.stat{margin-bottom:6px;padding:6px;background:rgba(255,255,255,0.05);border-radius:6px;font-size:13px}
 </style>
 </head>
-
 <body>
-
 <div id="panel">
-    <div id="header">Script Status</div>
-    <div id="content">
-        <div class="stat" id="uptime">UpTime: 0</div>
-        <div class="stat" id="connected">Connected: 0</div>
-        <div class="stat" id="connecting">Connecting: 0</div>
-        <div class="stat" id="queued">Queued Messages: 0</div>
-        <div class="stat" id="inactive">Inactive: 0</div>
-    </div>
+<div id="header">Script Status</div>
+<div id="content">
+<div class="stat" id="uptime"></div>
+<div class="stat" id="connected"></div>
+<div class="stat" id="connecting"></div>
+<div class="stat" id="queued"></div>
+<div class="stat" id="inactive"></div>
 </div>
-
+</div>
 <script>
-const panel = document.getElementById('panel');
-const header = document.getElementById('header');
-
-let dragging = false, offsetX = 0, offsetY = 0;
-
-const savedX = localStorage.getItem("panelX");
-const savedY = localStorage.getItem("panelY");
-
-if (savedX && savedY) {
-    panel.style.left = savedX + "px";
-    panel.style.top = savedY + "px";
+async function update(){
+try{
+const r=await fetch('/stats');
+const d=await r.json();
+uptime.textContent="UpTime: "+Math.floor(d.uptime)+"s";
+connected.textContent="Connected: "+d.connected;
+connecting.textContent="Connecting: "+d.connecting;
+queued.textContent="Queued Messages: "+d.queuedMessages;
+inactive.textContent="Inactive: "+Math.floor(d.inactiveFor/1000)+"s";
+}catch{}
 }
-
-header.onmousedown = e => {
-    dragging = true;
-    offsetX = e.clientX - panel.offsetLeft;
-    offsetY = e.clientY - panel.offsetTop;
-};
-
-document.onmousemove = e => {
-    if (!dragging) return;
-    panel.style.left = (e.clientX - offsetX) + 'px';
-    panel.style.top = (e.clientY - offsetY) + 'px';
-};
-
-document.onmouseup = () => {
-    dragging = false;
-    localStorage.setItem("panelX", panel.offsetLeft);
-    localStorage.setItem("panelY", panel.offsetTop);
-};
-
-async function update() {
-    try {
-        const res = await fetch('/stats');
-        const data = await res.json();
-
-        document.getElementById('uptime').textContent =
-            "UpTime: " + Math.floor(data.uptime) + "s";
-
-        document.getElementById('connected').textContent =
-            "Connected: " + data.connected;
-
-        document.getElementById('connecting').textContent =
-            "Connecting: " + data.connecting;
-
-        document.getElementById('queued').textContent =
-            "Queued Messages: " + data.queuedMessages;
-
-        document.getElementById('inactive').textContent =
-            "Inactive: " + Math.floor(data.inactiveFor / 1000) + "s";
-
-    } catch {}
-}
-
-setInterval(update, 1000);
+setInterval(update,1000);
 update();
 </script>
-
 </body>
-</html>
-    `);
+</html>`);
 }).listen(PORT);
 
 setInterval(() => {
-    totalQueuedMessages = 0;
+  totalQueuedMessages = 0;
 }, 1000);
