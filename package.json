@@ -1,7 +1,7 @@
 {
   "name": "ws-bot",
   "version": "1.0.0",
-  "description": "WebSocket bot controller",
+  "description": "Bot WS",
   "main": "script.js",
   "scripts": {
     "start": "node script.js"
