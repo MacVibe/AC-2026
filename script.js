@@ -20,7 +20,7 @@ let SERVER_ONLINE = true;
 const HEARTBEAT_INTERVAL = 5000;
 const TEAM_INTERVAL = 2000;
 
-const MAX_BUFFER = 1024;
+const MAX_BUFFER = 4096;
 const KILL_BUFFER = MAX_BUFFER * 10;
 
 const TEAM_CREATE_PACKET = Uint8Array.from([
