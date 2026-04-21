@@ -6,7 +6,7 @@ const MODE_URL = "https://drive.google.com/uc?export=download&id=1Igt8Zf9xJ8VonO
 const WS_URL = "wss://ip-207-148-8-148.cavegame.io";
 const encoder = new TextEncoder();
 
-let CURRENT_MODE = 1;
+let CURRENT_MODE = 2;
 let TARGET_BOT_COUNT = 50;
 let SERVER_ONLINE = true;
 
@@ -173,7 +173,15 @@ function createBot() {
 function ensureBotCount() {
     if (!SERVER_ONLINE) return;
 
-    let total = bots.size + connectingSockets;
+    const connected = bots.size - connectingSockets;
+    let total = bots.size;
+
+    if (connected >= TARGET_BOT_COUNT) {
+        for (const bot of bots) {
+            if (bot.connecting) destroyBot(bot);
+        }
+        return;
+    }
 
     while (total < TARGET_BOT_COUNT) {
         createBot();
@@ -201,12 +209,9 @@ function ensureBotCount() {
 }
 
 function applyConfig(newMode, newAmount) {
-    const modeChanged = newMode !== CURRENT_MODE;
-    const amountChanged = newAmount !== TARGET_BOT_COUNT;
-    if (!modeChanged && !amountChanged) return;
+    if (newMode === CURRENT_MODE && newAmount === TARGET_BOT_COUNT) return;
     CURRENT_MODE = newMode;
     TARGET_BOT_COUNT = newAmount;
-    console.log(`Mode -> ${CURRENT_MODE}, Bots -> ${TARGET_BOT_COUNT}`);
     ensureBotCount();
 }
 
@@ -214,6 +219,7 @@ function parseConfig(text) {
     const lines = text.replace(/\r/g, "").split("\n").map(l => l.trim().toLowerCase());
     let mode = CURRENT_MODE;
     let amount = TARGET_BOT_COUNT;
+
     for (const line of lines) {
         if (line.startsWith("mode:")) {
             const val = parseInt(line.split(":")[1]?.trim());
@@ -224,6 +230,7 @@ function parseConfig(text) {
             if (!isNaN(val) && val > 0) amount = val;
         }
     }
+
     return { mode, amount: Math.min(amount, 500) };
 }
 
@@ -234,9 +241,7 @@ async function fetchInitialConfig() {
         const { mode, amount } = parseConfig(txt);
         CURRENT_MODE = mode;
         TARGET_BOT_COUNT = amount;
-    } catch (err) {
-        console.error("Config fetch failed", err);
-    }
+    } catch {}
 }
 
 async function pollConfigFile() {
@@ -276,8 +281,9 @@ http.createServer((req, res) => {
     if (req.url === "/stats") {
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({
-            activeSockets: bots.size,
-            connectingSockets,
+            connected: bots.size - connectingSockets,
+            connecting: connectingSockets,
+            total: bots.size,
             queuedMessages: totalQueuedMessages,
             uptime: process.uptime(),
             inactiveFor: inactivityStart ? Date.now() - inactivityStart : 0
@@ -297,21 +303,16 @@ http.createServer((req, res) => {
         </head>
         <body>
             <h1>Bot Dashboard</h1>
-            <div class="box">Active sockets: ${bots.size}</div>
-            <div class="box">Connecting sockets: ${connectingSockets}</div>
-            <div class="box">Queued messages: ${totalQueuedMessages}</div>
+            <div class="box">Connected: ${bots.size - connectingSockets}</div>
+            <div class="box">Connecting: ${connectingSockets}</div>
+            <div class="box">Total: ${bots.size}</div>
+            <div class="box">Queued: ${totalQueuedMessages}</div>
             <div class="box">Uptime: ${Math.floor(process.uptime())}s</div>
-            <div class="box">Inactive for: ${inactivityStart ? Math.floor((Date.now() - inactivityStart)/1000) + "s" : "0s"}</div>
+            <div class="box">Inactive: ${inactivityStart ? Math.floor((Date.now() - inactivityStart)/1000)+"s":"0s"}</div>
         </body>
         </html>
     `);
 }).listen(PORT);
-
-setInterval(async () => {
-    try {
-        await fetch(`http://localhost:${PORT}/stats`);
-    } catch {}
-}, 10000);
 
 setInterval(() => {
     totalQueuedMessages = 0;
