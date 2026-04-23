@@ -191,13 +191,6 @@ function createBot() {
 function ensureBotCount() {
   if (!SERVER_ONLINE) return;
 
-  const connected = bots.size - connectingSockets;
-
-  if (connected >= TARGET_BOT_COUNT) {
-    for (const bot of [...bots]) if (bot.connecting) destroyBot(bot);
-    return;
-  }
-
   let total = bots.size;
 
   while (total < TARGET_BOT_COUNT) {
@@ -207,14 +200,6 @@ function ensureBotCount() {
 
   if (total > TARGET_BOT_COUNT) {
     let excess = total - TARGET_BOT_COUNT;
-
-    for (const bot of [...bots]) {
-      if (excess <= 0) break;
-      if (bot.connecting) {
-        destroyBot(bot);
-        excess--;
-      }
-    }
 
     for (const bot of [...bots]) {
       if (excess <= 0) break;
